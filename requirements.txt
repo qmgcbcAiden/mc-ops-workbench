@@ -1,0 +1,10 @@
+flet==0.85.1
+flet-code-editor
+flet-web==0.85.1
+certifi
+openai
+python-dotenv
+psutil
+pytest
+pytest-cov
+dulwich
