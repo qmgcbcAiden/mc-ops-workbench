@@ -88,6 +88,30 @@ Mod 或插件的版本、加载器和依赖不匹配，往往最终只表现为�
 
 ## 截图 / 演示
 
+### 动态演示
+
+![MC 运维工作台动态演示](images/demo.gif)
+
+从工作台启动 Minecraft 服务器，并在同一界面观察运行状态、实时日志、文件目录和运维助手。
+
+### 工作台总览
+
+![MC 运维工作台主界面](images/dashboard.png)
+
+主界面集中展示服务器启停、在线玩家、系统资源、最近事件、服务端文件、实时日志、命令控制台和 AI 助手。
+
+### AI 日志解读
+
+![AI 日志解读](images/ai-log-diagnosis.png)
+
+筛选相关错误日志后交给 AI 解读，获得问题严重程度、可能原因和处理方向，同时保留原始日志作为判断依据。
+
+### Mod / 插件体检
+
+![Mod 与插件体检](images/addon-diagnostics.png)
+
+扫描本地 Mod 与插件，按严重程度展示缺少依赖、客户端组件误装、版本不兼容和声明冲突等诊断结果。
+
 ---
 
 ## 功能特性
@@ -411,6 +435,7 @@ python -m pytest --cov=src --cov-report=term-missing
 ├── tests/               # 单元测试、集成测试与测试夹具
 ├── scripts/             # 公共仓库同步工具及其测试
 ├── icons/               # 项目自制的模型提供方中性标识
+├── images/              # README 截图与动态演示
 ├── data/                # SQLite、配置版本和运行数据，Git 忽略
 ├── mc_server/           # Minecraft 服务端文件，Git 忽略
 ├── .env.example         # 环境变量模板
