@@ -247,14 +247,24 @@ class ChatInterface:
     def get_autonomous_task_status(self, task_id: str) -> dict:
         return self.chat_service.get_autonomous_task_status(task_id=task_id)
 
-    def list_ai_models(self) -> list[dict]:
-        return self.chat_service.list_ai_models()
+    def list_ai_models(
+        self,
+        include_disabled: bool = False,
+        refresh: bool = False,
+    ) -> list[dict]:
+        return self.chat_service.list_ai_models(
+            include_disabled=include_disabled,
+            refresh=refresh,
+        )
 
     def get_selected_ai_model(self) -> dict:
         return self.chat_service.get_selected_ai_model()
 
     def select_ai_model(self, model_id: str) -> dict:
         return self.chat_service.select_ai_model(model_id)
+
+    def set_enabled_ai_models(self, selection_ids: list[str]) -> list[dict]:
+        return self.chat_service.set_enabled_ai_models(selection_ids)
 
     @property
     def has_ai(self) -> bool:

@@ -17,6 +17,7 @@ from src.ui.components.code_workbench import CodeWorkbench
 from src.ui.components.command_console import CommandConsole
 from src.ui.components.common import MetricCardController, panel, status_pill, tag, text_field
 from src.ui.components.file_explorer import FileExplorer
+from src.ui.components.environment_settings_dialog import EnvironmentSettingsDialog
 from src.ui.components.log_viewer import LogViewer
 from src.ui.components.server_controls import ServerControls
 
@@ -94,6 +95,7 @@ class OpsHomePage:
         page: ft.Page,
         interfaces: DashboardInterfaces,
         settings: Settings,
+        on_settings_saved=None,
     ):
         self.page = page
         self.interfaces = interfaces
@@ -154,6 +156,14 @@ class OpsHomePage:
         self.server_controls = ServerControls(interfaces.server)
         self.server_controls.set_on_status_change(self._on_server_status_changed)
         self.server_controls.set_on_start_requested(self._on_server_start_requested)
+        self.server_controls.set_on_settings_requested(self.show_settings)
+        self.environment_settings_dialog = EnvironmentSettingsDialog(
+            page,
+            interfaces.environment,
+            interfaces.java_environment,
+            interfaces.chat,
+            on_saved=on_settings_saved,
+        )
         self.command_console = CommandConsole(
             interfaces.command,
             on_change=self._update_command_console_controls,
@@ -253,6 +263,12 @@ class OpsHomePage:
             border_radius=theme.RADIUS,
             padding=ft.Padding.symmetric(horizontal=12, vertical=9),
         )
+
+    def show_settings(self, *, first_run: bool = False) -> None:
+        self.environment_settings_dialog.show(first_run=first_run)
+
+    def show_notification(self, message: str, *, is_error: bool = False) -> None:
+        self._show_snackbar(message, is_error)
 
     def build_workspace(self) -> ft.Control:
         workspace_height = self._workspace_height()

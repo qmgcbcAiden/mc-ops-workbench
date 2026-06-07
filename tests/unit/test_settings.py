@@ -25,7 +25,11 @@ def test_load_settings_uses_defaults(tmp_path: Path) -> None:
     assert settings.qwen_temperature == 0.2
     assert settings.deepseek_api_key == ""
     assert settings.deepseek_base_url == "https://api.deepseek.com"
+    assert settings.deepseek_model == "deepseek-v4-flash"
+    assert settings.ai_default_provider == "deepseek"
     assert settings.ai_default_model == "deepseek-v4-flash"
+    assert settings.ai_model_cache_ttl_seconds == 300
+    assert settings.ai_model_discovery_timeout_seconds == 10
     assert settings.mc_server_dir == tmp_path / "mc_server"
     assert settings.mc_log_path == tmp_path / "mc_server/logs/latest.log"
     assert settings.mc_command_mode == "stdin"
@@ -62,7 +66,11 @@ def test_load_settings_converts_environment_values(tmp_path: Path) -> None:
             "QWEN_MODEL": "qwen-test",
             "DEEPSEEK_API_KEY": "deepseek-secret",
             "DEEPSEEK_BASE_URL": "https://deepseek.example.com",
+            "DEEPSEEK_MODEL": "deepseek-reasoner",
+            "AI_DEFAULT_PROVIDER": "qwen",
             "AI_DEFAULT_MODEL": "qwen3.7-max",
+            "AI_MODEL_CACHE_TTL_SECONDS": "45",
+            "AI_MODEL_DISCOVERY_TIMEOUT_SECONDS": "7",
             "QWEN_TIMEOUT_SECONDS": "12",
             "QWEN_MAX_TOKENS": "345",
             "QWEN_TEMPERATURE": "0.5",
@@ -81,6 +89,10 @@ def test_load_settings_converts_environment_values(tmp_path: Path) -> None:
             "JAVA_AUTO_INSTALL_DIR": "runtime/java",
             "JAVA_DISTRIBUTION": "temurin",
             "JAVA_PACKAGE_TYPE": "jdk",
+            "AI_CUSTOM_PROVIDER_1_NAME": "OpenAI Proxy",
+            "AI_CUSTOM_PROVIDER_1_API_KEY": "proxy-key",
+            "AI_CUSTOM_PROVIDER_1_BASE_URL": "https://proxy.example/v1",
+            "AI_CUSTOM_PROVIDER_1_MODEL": "gpt-4.1-mini",
         },
         project_root=tmp_path,
     )
@@ -95,7 +107,11 @@ def test_load_settings_converts_environment_values(tmp_path: Path) -> None:
     assert settings.qwen_model == "qwen-test"
     assert settings.deepseek_api_key == "deepseek-secret"
     assert settings.deepseek_base_url == "https://deepseek.example.com"
+    assert settings.deepseek_model == "deepseek-reasoner"
+    assert settings.ai_default_provider == "qwen"
     assert settings.ai_default_model == "qwen3.7-max"
+    assert settings.ai_model_cache_ttl_seconds == 45
+    assert settings.ai_model_discovery_timeout_seconds == 7
     assert settings.qwen_timeout_seconds == 12
     assert settings.qwen_max_tokens == 345
     assert settings.qwen_temperature == 0.5
@@ -114,6 +130,12 @@ def test_load_settings_converts_environment_values(tmp_path: Path) -> None:
     assert settings.java_auto_install_dir == tmp_path / "runtime/java"
     assert settings.java_distribution == "temurin"
     assert settings.java_package_type == "jdk"
+    assert settings.ai_custom_providers[0].id == "custom_1"
+    assert settings.ai_custom_providers[0].label == "OpenAI Proxy"
+    assert settings.ai_custom_providers[0].api_key == "proxy-key"
+    assert settings.ai_custom_providers[0].base_url == "https://proxy.example/v1"
+    assert settings.ai_custom_providers[0].fallback_model == "gpt-4.1-mini"
+    assert settings.ai_custom_providers[0].api_key_env_name == "AI_CUSTOM_PROVIDER_1_API_KEY"
 
 
 def test_load_settings_rejects_invalid_numbers(tmp_path: Path) -> None:
@@ -123,3 +145,28 @@ def test_load_settings_rejects_invalid_numbers(tmp_path: Path) -> None:
             environ={"QWEN_TIMEOUT_SECONDS": "nope"},
             project_root=tmp_path,
         )
+
+
+def test_explicit_environment_overrides_file_without_polluting_process(
+    tmp_path: Path,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "MC_JAVA_XMX=2G\nQWEN_API_KEY=file-key\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(
+        env_file=env_path,
+        environ={"MC_JAVA_XMX": "6G"},
+        project_root=tmp_path,
+    )
+    file_only = load_settings(
+        env_file=env_path,
+        environ={},
+        project_root=tmp_path,
+    )
+
+    assert settings.mc_java_xmx == "6G"
+    assert settings.qwen_api_key == "file-key"
+    assert file_only.mc_java_xmx == "2G"

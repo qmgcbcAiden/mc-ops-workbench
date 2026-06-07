@@ -1,41 +1,24 @@
 from __future__ import annotations
 
-import pytest
-
 from src.ai.model_catalog import (
-    DEFAULT_AI_MODEL_ID,
-    coerce_ai_model_id,
-    get_ai_model_definition,
-    list_ai_model_definitions,
+    decode_model_selection,
+    encode_model_selection,
+    make_ai_model_definition,
 )
 
 
-def test_models_are_listed_by_capability_descending() -> None:
-    models = list_ai_model_definitions()
+def test_model_definition_uses_provider_qualified_selection_id() -> None:
+    model = make_ai_model_definition("QWEN", "qwen-example")
 
-    assert [model.id for model in models] == [
-        "qwen3.7-max",
-        "deepseek-v4-pro",
-        "qwen3.6-plus",
-        "qwen3.5-plus",
-        "deepseek-v4-flash",
-    ]
-    assert [model.capability_rank for model in models] == sorted(
-        [model.capability_rank for model in models],
-        reverse=True,
-    )
+    assert model.id == "qwen-example"
+    assert model.provider == "qwen"
+    assert model.selection_id == "qwen::qwen-example"
+    assert model.display_name == "qwen-example"
 
 
-def test_unauthenticated_filter_entry_currently_allows_all_models() -> None:
-    authenticated = list_ai_model_definitions(is_authenticated=True)
-    unauthenticated = list_ai_model_definitions(is_authenticated=False)
+def test_model_selection_round_trip() -> None:
+    encoded = encode_model_selection("deepseek", "deepseek-v4-flash")
 
-    assert [model.id for model in unauthenticated] == [model.id for model in authenticated]
-
-
-def test_model_lookup_and_fallback() -> None:
-    assert get_ai_model_definition("deepseek-v4-pro").provider == "deepseek"
-    assert coerce_ai_model_id("missing-model") == DEFAULT_AI_MODEL_ID
-
-    with pytest.raises(ValueError, match="Unsupported AI model"):
-        get_ai_model_definition("missing-model")
+    assert encoded == "deepseek::deepseek-v4-flash"
+    assert decode_model_selection(encoded) == ("deepseek", "deepseek-v4-flash")
+    assert decode_model_selection("legacy-model-id") is None

@@ -15,13 +15,14 @@ class ServerControls:
         self._interface = server_interface
         self._on_status_change: Callable[[dict | None], None] | None = None
         self._on_start_requested: Callable[[], None] | None = None
+        self._on_settings_requested: Callable[[], None] | None = None
 
         self._status_pill = status_pill("未运行", color=theme.MUTED, bgcolor=theme.PANEL_SOFT)
-        self._refresh_btn = ft.IconButton(
-            icon=ft.Icons.REFRESH,
+        self._settings_btn = ft.IconButton(
+            icon=ft.Icons.SETTINGS,
             icon_color=theme.MUTED,
-            tooltip="刷新状态",
-            on_click=self._on_refresh,
+            tooltip="基础设置",
+            on_click=self._on_settings,
         )
         self._toggle_btn = ft.FilledButton(
             content="启动",
@@ -39,10 +40,13 @@ class ServerControls:
     def set_on_start_requested(self, callback: Callable[[], None]) -> None:
         self._on_start_requested = callback
 
+    def set_on_settings_requested(self, callback: Callable[[], None]) -> None:
+        self._on_settings_requested = callback
+
     def build(self) -> ft.Row:
         self.refresh()
         self._control = ft.Row(
-            controls=[self._status_pill, self._refresh_btn, self._toggle_btn],
+            controls=[self._status_pill, self._settings_btn, self._toggle_btn],
             spacing=8,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
         )
@@ -86,7 +90,6 @@ class ServerControls:
         self._status_pill.content.color = color_map.get(state, theme.MUTED)
         self._status_pill.bgcolor = bg_map.get(state, theme.PANEL_SOFT)
 
-        self._refresh_btn.disabled = state in {"starting", "stopping"}
         self._toggle_btn.disabled = state in {"starting", "stopping"}
         if state == "running":
             self._toggle_btn.content = "停止"
@@ -105,9 +108,9 @@ class ServerControls:
             self._toggle_btn.icon = ft.Icons.PLAY_ARROW
             self._toggle_btn.style = _button_style(theme.GREEN, "#ffffff", "#2c7a56")
 
-    def _on_refresh(self, _event) -> None:
-        self.refresh()
-        self._notify(None)
+    def _on_settings(self, _event) -> None:
+        if self._on_settings_requested is not None:
+            self._on_settings_requested()
 
     def _on_toggle(self, _event) -> None:
         if self._action_running:

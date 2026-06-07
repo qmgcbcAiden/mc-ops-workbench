@@ -10,6 +10,10 @@ from src.repositories.event_repository import EventRepository
 from src.repositories.app_settings_repository import AppSettingsRepository
 from src.repositories.runtime_repository import ServerRuntimeRepository
 from src.service.java_environment_service import settings_with_java_overrides
+from src.service.startup_configuration_service import (
+    StartupConfigurationError,
+    StartupConfigurationService,
+)
 
 
 _PROCESS_REGISTRY: dict[Path, MinecraftServerProcess] = {}
@@ -34,6 +38,25 @@ class ServerService:
         return self._get_process().get_status().to_dict()
 
     def start_server(self) -> dict:
+        try:
+            StartupConfigurationService(
+                self._effective_settings()
+            ).ensure_rcon_configuration()
+        except StartupConfigurationError as exc:
+            result = {
+                "state": "stopped",
+                "status": "failed",
+                "pid": None,
+                "message": str(exc),
+                "label": "未运行",
+            }
+            self._runtime_repo.create_event(
+                event_type="start",
+                status="failed",
+                pid=None,
+                message=str(exc),
+            )
+            return result
         status = self._get_process().start()
         self._runtime_repo.create_event(
             event_type="start",

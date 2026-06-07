@@ -9,6 +9,7 @@ import flet as ft
 from src.app_context import create_app_context
 from src.config.settings import load_settings
 from src.interface.dashboard_interface import create_dashboard_interfaces
+from src.service.environment_settings_service import EnvironmentSettingsService
 from src.ui import theme
 from src.ui.pages.home import OpsHomePage
 
@@ -27,6 +28,14 @@ class AppShutdownController:
         self._lock = threading.Lock()
         self._done = False
 
+    def replace(self, home: OpsHomePage, interfaces: Any, context: Any) -> None:
+        with self._lock:
+            if self._done:
+                return
+            self._home = home
+            self._interfaces = interfaces
+            self._context = context
+
     def shutdown(self) -> None:
         with self._lock:
             if self._done:
@@ -38,7 +47,7 @@ class AppShutdownController:
         _safe_call(self._context.connection.close)
 
 
-def main_view(page: ft.Page) -> None:
+def main_view(page: ft.Page, *, first_run: bool = False) -> None:
     context = create_app_context()
     interfaces = create_dashboard_interfaces(context.connection, context.settings)
 
@@ -52,7 +61,61 @@ def main_view(page: ft.Page) -> None:
     page.window.min_height = WINDOW_MIN_HEIGHT
     page.window.alignment = ft.Alignment(0, 0)
 
-    home = OpsHomePage(page, interfaces, context.settings)
+    runtime: dict[str, Any] = {}
+
+    def on_settings_saved(result: dict) -> None:
+        current_home = runtime["home"]
+        current_interfaces = runtime["interfaces"]
+        state = current_interfaces.server.get_server_status().get("state", "stopped")
+        if state not in {"stopped", "crashed"}:
+            current_home.show_notification(
+                "设置已保存。服务器正在运行，新配置将在下次启动应用后生效。",
+            )
+            return
+
+        new_context = None
+        try:
+            new_context = create_app_context()
+            new_interfaces = create_dashboard_interfaces(
+                new_context.connection,
+                new_context.settings,
+            )
+            new_home = build_home(new_context, new_interfaces)
+            new_control = new_home.build()
+        except Exception as exc:
+            if new_context is not None:
+                _safe_call(new_context.connection.close)
+            current_home.show_notification(
+                f"设置已保存，但重载失败：{exc}",
+                is_error=True,
+            )
+            return
+
+        current_home.shutdown()
+        _safe_call(runtime["context"].connection.close)
+        page.clean()
+        page.add(new_control)
+        runtime.update(
+            context=new_context,
+            interfaces=new_interfaces,
+            home=new_home,
+        )
+        shutdown_controller.replace(new_home, new_interfaces, new_context)
+        page.on_resize = lambda _event=None: new_home.apply_responsive_layout()
+        page.on_disconnect = lambda _event=None: shutdown_controller.shutdown()
+        new_home.start_background_refresh()
+        new_home.show_notification(result.get("message") or "设置已保存并生效。")
+
+    def build_home(current_context, current_interfaces) -> OpsHomePage:
+        return OpsHomePage(
+            page,
+            current_interfaces,
+            current_context.settings,
+            on_settings_saved=on_settings_saved,
+        )
+
+    home = build_home(context, interfaces)
+    runtime.update(context=context, interfaces=interfaces, home=home)
     shutdown_controller = AppShutdownController(home, interfaces, context)
 
     async def destroy_window() -> None:
@@ -89,6 +152,8 @@ def main_view(page: ft.Page) -> None:
     page.add(home.build())
     _center_window(page)
     home.start_background_refresh()
+    if first_run:
+        home.show_settings(first_run=True)
 
 
 def _safe_call(callback: Callable[[], None]) -> None:
@@ -122,16 +187,20 @@ def _is_window_close_event(event) -> bool:
 
 
 def run() -> None:
+    bootstrap = EnvironmentSettingsService.ensure_environment_file()
     settings = load_settings()
     run_view = settings.flet_run_view.strip().lower()
 
     if run_view == "desktop":
         _configure_ssl_cert_file_for_desktop_bootstrap()
-        ft.run(main_view, view=ft.AppView.FLET_APP)
+        ft.run(
+            lambda page: main_view(page, first_run=bootstrap.created),
+            view=ft.AppView.FLET_APP,
+        )
         return
 
     ft.run(
-        main_view,
+        lambda page: main_view(page, first_run=bootstrap.created),
         view=ft.AppView.WEB_BROWSER,
         host=settings.flet_server_host,
         port=settings.flet_server_port,

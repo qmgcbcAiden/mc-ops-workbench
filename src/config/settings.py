@@ -6,13 +6,26 @@ from pathlib import Path
 from typing import Mapping
 
 try:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values
 except ImportError:  # pragma: no cover - exercised only when dependency is absent.
-    def load_dotenv(*_args: object, **_kwargs: object) -> bool:
-        return False
+    def dotenv_values(*_args: object, **_kwargs: object) -> dict[str, str]:
+        return {}
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class AiProviderSettings:
+    id: str
+    label: str
+    api_key: str
+    base_url: str
+    fallback_model: str
+    api_key_env_name: str
+    base_url_env_name: str
+    model_env_name: str
+    kind: str = "openai_compatible"
 
 
 @dataclass(frozen=True)
@@ -55,7 +68,12 @@ class Settings:
     mc_config_backup_on_save: bool
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
+    ai_default_provider: str = "deepseek"
     ai_default_model: str = "deepseek-v4-flash"
+    ai_model_cache_ttl_seconds: int = 300
+    ai_model_discovery_timeout_seconds: int = 10
+    ai_custom_providers: tuple[AiProviderSettings, ...] = ()
     config_versioning_enabled: bool = False
     config_version_repo_dir: Path = PROJECT_ROOT / "data/config_versions/default/repo"
     config_auto_approve_max_risk: str = "NONE"
@@ -108,10 +126,13 @@ def load_settings(
     else:
         env_path = Path(env_file)
 
-    if env_path.exists():
-        load_dotenv(env_path, override=False)
-
-    env = os.environ if environ is None else environ
+    file_values = {
+        key: value or ""
+        for key, value in dotenv_values(env_path).items()
+        if key
+    } if env_path.exists() else {}
+    external_values = os.environ if environ is None else environ
+    env = {**file_values, **external_values}
 
     server_dir = _as_path(env.get("MC_SERVER_DIR", "mc_server"), project_root)
     jar_value = env.get("MC_SERVER_JAR", "")
@@ -189,7 +210,18 @@ def load_settings(
         mc_config_backup_on_save=env.get("MC_CONFIG_BACKUP_ON_SAVE", "true").lower() == "true",
         deepseek_api_key=env.get("DEEPSEEK_API_KEY", ""),
         deepseek_base_url=env.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        deepseek_model=env.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        ai_default_provider=env.get("AI_DEFAULT_PROVIDER", "deepseek"),
         ai_default_model=env.get("AI_DEFAULT_MODEL", "deepseek-v4-flash"),
+        ai_model_cache_ttl_seconds=_as_int(
+            "AI_MODEL_CACHE_TTL_SECONDS",
+            env.get("AI_MODEL_CACHE_TTL_SECONDS", "300"),
+        ),
+        ai_model_discovery_timeout_seconds=_as_int(
+            "AI_MODEL_DISCOVERY_TIMEOUT_SECONDS",
+            env.get("AI_MODEL_DISCOVERY_TIMEOUT_SECONDS", "10"),
+        ),
+        ai_custom_providers=_load_custom_ai_providers(env),
         config_versioning_enabled=env.get("CONFIG_VERSIONING_ENABLED", "true").lower() == "true",
         config_version_repo_dir=_as_path(
             env.get("CONFIG_VERSION_REPO_DIR", "data/config_versions/default/repo"),
@@ -241,3 +273,36 @@ def load_settings(
             env.get("ADDON_SCAN_MAX_JAR_BYTES", "104857600"),
         ),
     )
+
+
+def _load_custom_ai_providers(env: Mapping[str, str]) -> tuple[AiProviderSettings, ...]:
+    providers: list[AiProviderSettings] = []
+    for index in range(1, 6):
+        prefix = f"AI_CUSTOM_PROVIDER_{index}"
+        name_key = f"{prefix}_NAME"
+        api_key_key = f"{prefix}_API_KEY"
+        base_url_key = f"{prefix}_BASE_URL"
+        model_key = f"{prefix}_MODEL"
+        values = (
+            env.get(name_key, ""),
+            env.get(api_key_key, ""),
+            env.get(base_url_key, ""),
+            env.get(model_key, ""),
+        )
+        if not any(str(value).strip() for value in values):
+            continue
+        provider_id = f"custom_{index}"
+        label = str(env.get(name_key, "")).strip() or f"其它服务商 {index}"
+        providers.append(
+            AiProviderSettings(
+                id=provider_id,
+                label=label,
+                api_key=env.get(api_key_key, ""),
+                base_url=env.get(base_url_key, ""),
+                fallback_model=env.get(model_key, ""),
+                api_key_env_name=api_key_key,
+                base_url_env_name=base_url_key,
+                model_env_name=model_key,
+            )
+        )
+    return tuple(providers)

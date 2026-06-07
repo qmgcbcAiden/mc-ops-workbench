@@ -344,8 +344,15 @@ class AddonKnowledgeService:
 
 def _asset_row(scan_run_id: str, asset: AddonAsset) -> dict[str, Any]:
     row = asset.to_dict()
-    identity = row.get("sha1") or f"{scan_run_id}:{row['relative_path']}"
-    row["id"] = f"adda_{_short_hash(identity + ':' + row['relative_path'])}"
+    identity = json.dumps(
+        {
+            "scan_run_id": scan_run_id,
+            "sha1": row.get("sha1"),
+            "relative_path": row["relative_path"],
+        },
+        sort_keys=True,
+    )
+    row["id"] = f"adda_{_short_hash(identity)}"
     return row
 
 

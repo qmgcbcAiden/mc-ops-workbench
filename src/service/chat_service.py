@@ -78,10 +78,17 @@ class ChatService:
             and configured
         )
 
-    def list_ai_models(self) -> list[dict]:
+    def list_ai_models(
+        self,
+        include_disabled: bool = False,
+        refresh: bool = False,
+    ) -> list[dict]:
         if self._ai_models is None:
             return []
-        return self._ai_models.list_models()
+        return self._ai_models.list_models(
+            refresh=refresh,
+            include_disabled=include_disabled,
+        )
 
     def get_selected_ai_model(self) -> dict:
         if self._ai_models is None:
@@ -100,6 +107,11 @@ class ChatService:
         if self._ai_models is None:
             raise RuntimeError("AI model service is not configured")
         return self._ai_models.select_model(model_id)
+
+    def set_enabled_ai_models(self, selection_ids: list[str]) -> list[dict]:
+        if self._ai_models is None:
+            raise RuntimeError("AI model service is not configured")
+        return self._ai_models.set_enabled_models(selection_ids)
 
     def create_session(self, title: str | None = "server_ops") -> str:
         return self.chat_repository.create_session(title)

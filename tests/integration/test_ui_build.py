@@ -174,7 +174,7 @@ def test_ops_home_page_recomputes_workspace_for_wide_resize(tmp_path: Path) -> N
     assert home.chat_panel._model_selector_button.content.width == COMPOSER_MODEL_SELECTOR_WIDTH
     assert home.chat_panel._model_selector_button.content.height == COMPOSER_MODEL_SELECTOR_HEIGHT
     selector_label = home.chat_panel._model_selector_button.content.content.controls[1]
-    assert selector_label.value == "DeepSeek v4 Flash"
+    assert selector_label.value == "deepseek-v4-flash"
     assert selector_label.size == COMPOSER_MODEL_SELECTOR_FONT_SIZE
     selector_icon = home.chat_panel._model_selector_button.content.content.controls[0]
     menu_icon = home.chat_panel._model_selector_button.items[0].content.controls[0]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from tests.fixtures.fake_mc_server import create_fake_mc_server
@@ -33,7 +34,7 @@ def _make_settings(tmp_path: Path, server_dir: Path):
         mc_command_mode="stdin",
         mc_rcon_host="127.0.0.1",
         mc_rcon_port=25575,
-        mc_rcon_password="",
+        mc_rcon_password="configured-secret",
         mc_start_timeout_seconds=1,
         mc_stop_timeout_seconds=1,
         qwen_log_model="",
@@ -82,6 +83,32 @@ class TestServerService:
             service = ServerService(repo, settings)
             result = service.start_server()
             assert "缺少服务端核心" in result["message"]
+            properties = (server_dir / "server.properties").read_text(encoding="utf-8")
+            assert "enable-rcon=true" in properties
+            assert "rcon.password=configured-secret" in properties
+        finally:
+            conn.close()
+
+    def test_start_with_missing_rcon_password_fails_before_writing_server_files(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        server_dir = tmp_path / "mc_server"
+        server_dir.mkdir()
+        db_path = tmp_path / "app.db"
+        run_migrations(str(db_path))
+        conn = get_connection(str(db_path))
+        try:
+            repo = ServerRuntimeRepository(conn)
+            settings = replace(
+                _make_settings(tmp_path, server_dir),
+                mc_rcon_password="",
+            )
+            result = ServerService(repo, settings).start_server()
+
+            assert result["status"] == "failed"
+            assert "MC_RCON_PASSWORD" in result["message"]
+            assert not (server_dir / "server.properties").exists()
         finally:
             conn.close()
 

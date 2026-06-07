@@ -74,7 +74,7 @@ def test_rcon_configuration_requires_env_password(tmp_path: Path) -> None:
     assert not (tmp_path / "server.properties").exists()
 
 
-def test_app_context_configures_rcon_before_database_migration(
+def test_app_context_does_not_touch_server_files_before_user_starts_server(
     tmp_path: Path, monkeypatch
 ) -> None:
     server_dir = tmp_path / "mc_server"
@@ -90,5 +90,5 @@ def test_app_context_configures_rcon_before_database_migration(
 
     app_context.create_app_context()
 
-    assert "enable-rcon=true" in (server_dir / "server.properties").read_text(encoding="utf-8")
+    assert not (server_dir / "server.properties").exists()
     assert migration_calls == [settings.db_path]

@@ -216,10 +216,11 @@ class ChatPanel:
             except Exception:
                 pass
         return {
-            "id": "deepseek-v4-flash",
-            "display_name": "DeepSeek v4 Flash",
-            "short_name": "DS Flash",
-            "provider": "deepseek",
+            "id": "unconfigured",
+            "selection_id": "deepseek::unconfigured",
+            "display_name": "AI 未配置",
+            "short_name": "AI 未配置",
+            "provider": "",
             "selected": True,
             "configured": False,
         }
@@ -247,14 +248,23 @@ class ChatPanel:
         )
 
     def _model_menu_items(self) -> list[ft.PopupMenuItem]:
-        selected_id = str(self._selected_model.get("id", ""))
+        selected_id = str(
+            self._selected_model.get("selection_id")
+            or self._selected_model.get("id", "")
+        )
+        # TODO(settings-ui): move the complete provider model catalog into a
+        # searchable settings page so large catalogs do not overload this menu.
         return [
             ft.PopupMenuItem(
                 content=_model_menu_content(model),
-                checked=model.get("id") == selected_id,
+                checked=(
+                    model.get("selection_id") or model.get("id")
+                ) == selected_id,
                 height=38,
-                on_click=lambda _event, model_id=model.get("id", ""): self._select_ai_model(
-                    str(model_id)
+                on_click=lambda _event, selection_id=(
+                    model.get("selection_id") or model.get("id", "")
+                ): self._select_ai_model(
+                    str(selection_id)
                 ),
             )
             for model in self._list_ai_models()

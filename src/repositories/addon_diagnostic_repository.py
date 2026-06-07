@@ -99,21 +99,21 @@ class AddonDiagnosticRepository:
                 )
             )
         with locked_connection(self._connection):
-            self._connection.executemany(
-                """
-                INSERT INTO addon_assets
-                    (
-                        id, scan_run_id, relative_path, file_name, folder, kind,
-                        addon_id, name, version, loader, environment,
-                        minecraft_versions_json, dependencies_json, conflicts_json,
-                        sha1, sha512, file_size_bytes, metadata_source,
-                        metadata_confidence, knowledge_json, created_at
-                    )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-            self._connection.commit()
+            with self._connection:
+                self._connection.executemany(
+                    """
+                    INSERT INTO addon_assets
+                        (
+                            id, scan_run_id, relative_path, file_name, folder, kind,
+                            addon_id, name, version, loader, environment,
+                            minecraft_versions_json, dependencies_json, conflicts_json,
+                            sha1, sha512, file_size_bytes, metadata_source,
+                            metadata_confidence, knowledge_json, created_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
 
     def add_diagnostics(self, scan_run_id: str, diagnostics: list[dict[str, Any]]) -> None:
         if not diagnostics:
@@ -138,20 +138,20 @@ class AddonDiagnosticRepository:
                 )
             )
         with locked_connection(self._connection):
-            self._connection.executemany(
-                """
-                INSERT INTO addon_diagnostics
-                    (
-                        id, scan_run_id, severity, category, message,
-                        evidence_type, confidence, affected_files_json,
-                        evidence_json, sources_json, suggested_actions_json,
-                        created_at
-                    )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                rows,
-            )
-            self._connection.commit()
+            with self._connection:
+                self._connection.executemany(
+                    """
+                    INSERT INTO addon_diagnostics
+                        (
+                            id, scan_run_id, severity, category, message,
+                            evidence_type, confidence, affected_files_json,
+                            evidence_json, sources_json, suggested_actions_json,
+                            created_at
+                        )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
 
     def latest_scan_run(self) -> dict[str, Any] | None:
         with locked_connection(self._connection):

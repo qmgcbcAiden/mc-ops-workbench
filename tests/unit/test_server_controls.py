@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 
+import flet as ft
+
 from src.ui.components.server_controls import ServerControls
 
 
@@ -120,3 +122,18 @@ def test_stop_button_does_not_notify_start_requested() -> None:
 
     assert server.stop_called.wait(0.5)
     assert events == ["stop_server"]
+
+
+def test_settings_button_replaces_manual_refresh_action() -> None:
+    server = _ServerInterfaceStub(state="stopped")
+    controls = ServerControls(server)
+    requested: list[str] = []
+    controls.set_on_settings_requested(lambda: requested.append("settings"))
+
+    row = controls.build()
+    controls._settings_btn.on_click(None)
+
+    assert row.controls[1] is controls._settings_btn
+    assert controls._settings_btn.icon == ft.Icons.SETTINGS
+    assert not hasattr(controls, "_refresh_btn")
+    assert requested == ["settings"]

@@ -166,9 +166,6 @@ macOS / Linux：
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
-# 先编辑 .env，再继续运行下面两条命令
-python -m src.db.migrate
 python -m src.main
 ```
 
@@ -178,18 +175,17 @@ Windows PowerShell：
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-# 先编辑 .env，再继续运行下面两条命令
-python -m src.db.migrate
 python -m src.main
 ```
 
-启动前请确认：
+首次启动会自动：
 
-- 已编辑 `.env`，并至少设置 `MC_RCON_PASSWORD`。
-- 已自行准备 Minecraft Java 服务端核心。
-- 服务端核心位于 `MC_SERVER_DIR` 指定的目录。
-- 服务端核心文件名与 `MC_SERVER_JAR` 的设置一致。
+- 从 `.env.example` 创建 `.env`，并生成随机 RCON 密码。
+- 执行数据库 migration。
+- 打开可跳过的基础设置窗口。
+- 检测服务器目录、服务端启动文件、Java 和推荐内存。
+
+你仍需自行准备并选择 Minecraft Java 服务端文件。AI 为可选功能；填写服务商的 API Key 和 Base URL 后，应用会自动获取可用模型。
 
 ### 详细配置
 
@@ -197,40 +193,26 @@ python -m src.main
 
 - 可用的 Python 环境。
 - 一个自行获取并同意其许可条款的 Minecraft Java 服务端核心。
-- 一个用于本地 RCON 的密码。`MC_RCON_PASSWORD` 是当前启动工作台的必填配置。
+- RCON 密码会在首次启动时自动生成，也可在 `.env` 中手动覆盖。
 - AI API Key 为可选项；不配置时仍可使用本地运维功能。
+- DeepSeek 和 Qwen 只需配置其中一个 API Key；应用会自动选择已配置的服务商。
+- 其它服务商需要提供 OpenAI 兼容接口，设置页可添加多个服务商。
+- 可用模型通过服务商的 OpenAI 兼容模型列表接口动态获取；模型太多时，可在设置页只启用常用模型。
 
-macOS / Linux：
+大部分用户可以通过顶部启动按钮旁的设置入口完成配置。基础设置会展示已配置的 AI 服务商、dotenv key、API Key、Base URL、服务器目录和最大内存；检测失败时再展开手动调整 jar 或 Java 路径。
 
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-cp .env.example .env
-```
-
-Windows PowerShell：
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-```
-
-编辑 `.env`，至少设置一个非默认的 RCON 密码，并按本机环境确认服务端目录和 Java 配置：
+如需高级配置，可以继续直接编辑 `.env`：
 
 - `MC_SERVER_DIR`：Minecraft 服务端所在目录。
 - `MC_SERVER_JAR`：服务端核心文件名。
 - `MC_JAVA_PATH`：用于启动服务端的 Java。
-- `MC_RCON_PASSWORD`：你自己设置的本地 RCON 密码，不要提交到仓库。
+- `MC_RCON_PASSWORD`：自动生成的本地 RCON 密码，不要提交到仓库。
 
 将服务端核心放到 `MC_SERVER_DIR` 指定的目录，并确保文件名与 `MC_SERVER_JAR` 一致。服务端核心、世界、日志和运行数据不会提交到 Git。
 
-运行数据库迁移并启动应用：
+启动应用：
 
 ```bash
-python -m src.db.migrate
 python -m src.main
 ```
 
@@ -258,9 +240,9 @@ python -m pytest --cov=src --cov-report=term-missing
 
 ## 基本使用流程
 
-1. 从 `.env.example` 创建 `.env`，配置 Minecraft 目录、服务端核心、Java 和 RCON 密码。
-2. 将 Minecraft 服务端文件放入 `mc_server/`，或修改 `MC_SERVER_DIR` 指向现有服务端目录。
-3. 运行 `python -m src.main` 打开工作台。
+1. 运行 `python -m src.main`；应用会自动创建 `.env` 并打开基础设置。
+2. 将 Minecraft 服务端文件放入 `mc_server/`，或在设置中选择现有服务端目录。
+3. 检查自动识别的 Java 和内存建议；需要 AI 时填写 API Key 与 Base URL。
 4. 在顶部服务器控制区启动服务器，并观察状态、PID、CPU、内存和实时日志。
 5. 使用玩家面板、文件工作台、日志筛选和命令控制台完成日常运维。
 6. 对高风险命令或配置变更检查命令内容、风险等级与 diff，再选择确认、拒绝或回滚。

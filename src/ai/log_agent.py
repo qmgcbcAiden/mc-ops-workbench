@@ -356,7 +356,7 @@ class LogAgent:
             key_findings=findings,
             retained_snippets=retained[:20],
             suspected_causes=[],
-            next_steps=["配置 QWEN_API_KEY 以启用 AI 日志解读。",
+            next_steps=["配置 DEEPSEEK_API_KEY 或 QWEN_API_KEY 以启用 AI 日志解读。",
                         "手动检查关键行的完整上下文。",
                         "查看对应时间段玩家行为和服务器事件。"],
             compressed_text=compressed,

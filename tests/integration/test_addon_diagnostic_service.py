@@ -48,14 +48,17 @@ def test_scan_persists_assets_diagnostics_and_remediation(tmp_path: Path) -> Non
             repository=AddonDiagnosticRepository(connection),
         )
 
+        first_report = service.scan_addons()
         report = service.scan_addons()
         diagnostics = report["diagnostics"]
         proposal = service.create_addon_remediation_plan([diagnostics[0]["id"]])
 
+        assert first_report["status"] == "completed"
         assert report["status"] == "completed"
+        assert first_report["scan_run_id"] != report["scan_run_id"]
         assert report["summary"]["blockers"] >= 1
-        assert connection.execute("SELECT COUNT(*) FROM addon_assets").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM addon_diagnostics").fetchone()[0] >= 1
+        assert connection.execute("SELECT COUNT(*) FROM addon_assets").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM addon_diagnostics").fetchone()[0] >= 2
         assert proposal["status"] == "proposal_created"
         assert proposal["confirmation_required"] is True
         assert connection.execute("SELECT COUNT(*) FROM addon_remediation_proposals").fetchone()[0] == 1

@@ -14,6 +14,7 @@ from src.interface.chat_interface import ChatInterface
 from src.interface.command_interface import CommandInterface
 from src.interface.config_edit_interface import ConfigEditInterface
 from src.interface.config_version_interface import ConfigVersionInterface
+from src.interface.environment_settings_interface import EnvironmentSettingsInterface
 from src.interface.file_interface import FileInterface
 from src.interface.java_environment_interface import JavaEnvironmentInterface
 from src.interface.log_interface import LogInterface
@@ -44,6 +45,7 @@ from src.service.ai_model_service import AiModelService
 from src.service.addon_diagnostic_service import AddonDiagnosticService
 from src.service.config_edit_service import ConfigEditService
 from src.service.config_version_service import ConfigVersionService
+from src.service.environment_settings_service import EnvironmentSettingsService
 from src.service.file_service import FileService
 from src.service.java_environment_service import JavaEnvironmentService
 from src.service.log_service import LogService
@@ -69,6 +71,7 @@ class DashboardInterfaces:
     server: ServerInterface
     capability: ServerCapabilityInterface
     java_environment: JavaEnvironmentInterface
+    environment: EnvironmentSettingsInterface
     addon: AddonDiagnosticInterface
 
 
@@ -91,6 +94,9 @@ def create_dashboard_interfaces(
         settings=settings,
         audit_repository=JavaEnvironmentRepository(connection),
         app_settings_repository=app_settings_repo,
+    )
+    environment_settings_service = EnvironmentSettingsService(
+        java_environment_service=java_environment_service,
     )
     player_service = PlayerService(
         PlayerRepository(connection),
@@ -194,6 +200,7 @@ def create_dashboard_interfaces(
         server=ServerInterface(server_service),
         capability=ServerCapabilityInterface(ServerCapabilityService(settings)),
         java_environment=JavaEnvironmentInterface(java_environment_service),
+        environment=EnvironmentSettingsInterface(environment_settings_service),
         addon=AddonDiagnosticInterface(addon_service),
     )
 
