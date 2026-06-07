@@ -16,6 +16,7 @@ class FormatResult:
 
 
 _LANGUAGE_BY_EXTENSION = {
+    ".bat": "batch",
     ".cfg": "properties",
     ".conf": "config",
     ".ini": "ini",
@@ -23,6 +24,7 @@ _LANGUAGE_BY_EXTENSION = {
     ".json5": "json5",
     ".mcmeta": "json",
     ".properties": "properties",
+    ".sh": "shell",
     ".toml": "toml",
     ".yaml": "yaml",
     ".yml": "yaml",

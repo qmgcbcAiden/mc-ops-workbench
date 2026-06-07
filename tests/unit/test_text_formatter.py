@@ -12,6 +12,8 @@ def test_language_for_common_minecraft_configuration_files() -> None:
     assert language_for_path("config/forge-server.toml") == "toml"
     assert language_for_path("config/mod.json5") == "json5"
     assert language_for_path("config/module.ini") == "ini"
+    assert language_for_path("start.sh") == "shell"
+    assert language_for_path("start.bat") == "batch"
 
 
 def test_formats_json_with_indentation() -> None:

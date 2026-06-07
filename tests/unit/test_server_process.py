@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from src.mc.server_process import (
     _looks_like_pause_prompt,
     build_launch_args,
     build_start_script_args,
+    discover_start_scripts,
 )
 
 
@@ -307,8 +309,149 @@ class TestMinecraftServerProcess:
 
         result = _ensure_start_script(settings.mc_server_dir, settings)
 
-        assert result == script_path
+        assert result == settings.mc_server_dir / "dashboard_start.sh"
         assert script_path.read_text(encoding="utf-8") == "#!/usr/bin/env bash\necho custom\n"
+        assert result.exists()
+
+    def test_launch_args_always_include_exactly_one_nogui(self, tmp_path: Path) -> None:
+        settings = _make_settings(tmp_path)
+
+        empty_args = build_launch_args(replace(settings, mc_extra_args=""))
+        duplicate_args = build_launch_args(
+            replace(settings, mc_extra_args="--demo nogui NOGUI")
+        )
+
+        assert empty_args[-1] == "nogui"
+        assert empty_args.count("nogui") == 1
+        assert duplicate_args[-1] == "nogui"
+        assert [arg.lower() for arg in duplicate_args].count("nogui") == 1
+
+    def test_discovers_common_posix_and_neoforge_start_scripts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: False)
+        settings = _make_settings(tmp_path)
+        (settings.mc_server_dir / "run.sh").write_text(
+            "#!/usr/bin/env sh\njava -jar server.jar \"$@\"\n",
+            encoding="utf-8",
+        )
+        (settings.mc_server_dir / "launch.sh").write_text(
+            "#!/usr/bin/env sh\n"
+            "java @user_jvm_args.txt @libraries/net/neoforged/neoforge/unix_args.txt \"$@\"\n",
+            encoding="utf-8",
+        )
+        (settings.mc_server_dir / "server.bat").write_text(
+            "java -jar server.jar %*\r\n",
+            encoding="utf-8",
+        )
+
+        scripts = discover_start_scripts(settings.mc_server_dir)
+
+        assert [script.name for script in scripts] == ["run.sh", "launch.sh"]
+
+    def test_discovers_windows_batch_before_cmd_scripts(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: True)
+        settings = _make_settings(tmp_path)
+        (settings.mc_server_dir / "start_server.cmd").write_text(
+            "java -jar server.jar %*\r\n",
+            encoding="utf-8",
+        )
+        (settings.mc_server_dir / "server.bat").write_text(
+            "java -jar server.jar %*\r\n",
+            encoding="utf-8",
+        )
+
+        scripts = discover_start_scripts(settings.mc_server_dir)
+
+        assert [script.name for script in scripts] == ["server.bat", "start_server.cmd"]
+
+    def test_custom_script_that_forwards_args_receives_runtime_nogui(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: False)
+        settings = _make_settings(tmp_path)
+        script_path = settings.mc_server_dir / "run.sh"
+        original = "#!/usr/bin/env sh\njava -jar server.jar \"$@\"\n"
+        script_path.write_text(original, encoding="utf-8")
+
+        selected = _ensure_start_script(settings.mc_server_dir, settings)
+        args = build_start_script_args(settings, selected)
+
+        assert selected == script_path
+        assert args == ["bash", str(script_path), "nogui"]
+        assert script_path.read_text(encoding="utf-8") == original
+        assert not (settings.mc_server_dir / ".dashboard-backups").exists()
+
+    def test_custom_shell_script_without_arg_forwarding_is_backed_up_and_rewritten(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: False)
+        settings = _make_settings(tmp_path)
+        script_path = settings.mc_server_dir / "run.sh"
+        original = "#!/usr/bin/env sh\n# add nogui here if needed\njava -jar server.jar\n"
+        script_path.write_text(original, encoding="utf-8")
+
+        selected = _ensure_start_script(settings.mc_server_dir, settings)
+
+        assert selected == script_path
+        assert "java -jar server.jar nogui\n" in script_path.read_text(encoding="utf-8")
+        backups = list((settings.mc_server_dir / ".dashboard-backups").glob("run.sh.*.bak"))
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == original.encode("utf-8")
+
+    def test_custom_batch_script_without_arg_forwarding_is_backed_up_and_rewritten(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: True)
+        settings = _make_settings(tmp_path)
+        script_path = settings.mc_server_dir / "server.bat"
+        original = b"@echo off\r\njava -jar server.jar\r\npause\r\n"
+        script_path.write_bytes(original)
+
+        selected = _ensure_start_script(settings.mc_server_dir, settings)
+
+        assert selected == script_path
+        assert b"java -jar server.jar nogui\r\n" in script_path.read_bytes()
+        backups = list((settings.mc_server_dir / ".dashboard-backups").glob("server.bat.*.bak"))
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == original
+
+    def test_start_refuses_complex_script_when_nogui_cannot_be_guaranteed(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: False)
+        settings = _make_settings(tmp_path)
+        settings.mc_server_jar.write_bytes(b"fake jar")
+        (settings.mc_server_dir / "start.sh").write_text(
+            "#!/usr/bin/env sh\njava \\\n  -jar server.jar\n",
+            encoding="utf-8",
+        )
+        launched: list[list[str]] = []
+
+        def popen_factory(args, **_kwargs):
+            launched.append(args)
+            return _StartedProcess()
+
+        proc = MinecraftServerProcess(settings, popen_factory=popen_factory)
+        result = proc.start()
+
+        assert result.state == "stopped"
+        assert "nogui" in result.message
+        assert launched == []
 
     @pytest.mark.parametrize(
         ("is_windows", "script_name", "expected_args_prefix"),

@@ -13,6 +13,7 @@ import psutil
 
 from src.ai.model_discovery import ModelDiscoveryConfig, list_provider_model_ids
 from src.config.settings import PROJECT_ROOT, Settings, load_settings
+from src.mc.server_process import discover_start_scripts
 from src.service.java_environment_service import JavaEnvironmentService
 
 
@@ -40,7 +41,6 @@ PROVIDER_DEFAULTS = {
 }
 _ENV_ASSIGNMENT_RE = re.compile(r"^(?P<prefix>\s*(?:export\s+)?)(?P<key>[A-Z][A-Z0-9_]*)=")
 _PLACEHOLDER_VALUES = {"replace_me", "changeme", "your_api_key"}
-_START_SCRIPT_NAMES = ("start.bat", "start.sh")
 
 
 @dataclass(frozen=True)
@@ -303,10 +303,7 @@ class EnvironmentSettingsService:
             selected = configured
             source = "configured_default"
 
-        scripts = [
-            path.name for path in (selected / name for name in _START_SCRIPT_NAMES)
-            if path.is_file()
-        ]
+        scripts = [path.name for path in discover_start_scripts(selected)]
         jars = sorted(selected.glob("*.jar")) if selected.is_dir() else []
         configured_jar = settings.mc_server_jar
         selected_jar: Path | None = None
@@ -507,7 +504,7 @@ def _is_server_directory(path: Path) -> bool:
         return False
     return (
         (path / "server.properties").is_file()
-        or any((path / name).is_file() for name in _START_SCRIPT_NAMES)
+        or bool(discover_start_scripts(path))
         or any(path.glob("*.jar"))
     )
 

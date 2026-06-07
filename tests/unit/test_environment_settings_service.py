@@ -76,7 +76,10 @@ def test_inspect_detects_unique_server_java_and_visible_provider_keys(
 ) -> None:
     server_dir = tmp_path / "mcServer"
     server_dir.mkdir()
-    (server_dir / "start.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    (server_dir / "start.sh").write_text(
+        "#!/bin/sh\njava -jar server.jar \"$@\"\n",
+        encoding="utf-8",
+    )
     (tmp_path / ".env").write_text(
         "AI_DEFAULT_PROVIDER=qwen\n"
         "QWEN_API_KEY=secret-value\n"
@@ -120,6 +123,32 @@ def test_inspect_detects_unique_server_java_and_visible_provider_keys(
     ]
     assert result["rcon_configured"] is True
     assert "rcon-secret" not in str(result)
+
+
+def test_inspect_lists_detected_non_default_start_scripts_in_priority_order(
+    tmp_path: Path,
+) -> None:
+    server_dir = tmp_path / "mc_server"
+    server_dir.mkdir()
+    (server_dir / "launch.sh").write_text(
+        "#!/bin/sh\njava -jar server.jar \"$@\"\n",
+        encoding="utf-8",
+    )
+    (server_dir / "run.sh").write_text(
+        "#!/bin/sh\njava @user_jvm_args.txt @libraries/net/neoforged/neoforge/unix_args.txt \"$@\"\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text(
+        "MC_SERVER_DIR=mc_server\nMC_RCON_PASSWORD=rcon-secret\n",
+        encoding="utf-8",
+    )
+
+    result = EnvironmentSettingsService(
+        project_root=tmp_path,
+        environ={},
+    ).inspect()
+
+    assert result["server_detection"]["start_scripts"] == ["run.sh", "launch.sh"]
 
 
 def test_save_updates_only_basic_keys_and_preserves_comments_and_advanced_values(

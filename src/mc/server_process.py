@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import locale
 import os
+import re
 import shlex
 import subprocess
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -47,11 +49,66 @@ class CommandResult:
         }
 
 
+@dataclass(frozen=True)
+class StartScriptInspection:
+    path: Path
+    content: str
+    encoding: str
+    managed: bool
+    minecraft_script: bool
+    contains_nogui: bool
+    forwards_args: bool
+    supported_on_current_platform: bool
+
+
 PopenFactory = Callable[..., subprocess.Popen]
 EULA_FILE_NAME = "eula.txt"
 EULA_ACCEPTED_TEXT = "eula=true\n"
 MAX_PENDING_STDOUT_EVENTS = 1000
 MANAGED_START_SCRIPT_MARKER = "# Managed by MC ops dashboard"
+MANAGED_START_SCRIPT_STEM = "dashboard_start"
+START_SCRIPT_BACKUP_DIR = ".dashboard-backups"
+POSIX_START_SCRIPT_SUFFIXES = (".sh", ".command", ".bash")
+WINDOWS_START_SCRIPT_SUFFIXES = (".bat", ".cmd", ".ps1")
+COMMON_START_SCRIPT_STEMS = {
+    "start",
+    "run",
+    "launch",
+    "server",
+    "startserver",
+    "runserver",
+    "launchserver",
+    "start_server",
+    "run_server",
+    "server_start",
+    "server-start",
+    "forge",
+    "neoforge",
+}
+COMMON_START_SCRIPT_ORDER = (
+    "start",
+    "run",
+    "launch",
+    "server",
+    "startserver",
+    "runserver",
+    "launchserver",
+    "serverstart",
+    "forge",
+    "neoforge",
+)
+_NORMALIZED_COMMON_START_SCRIPT_STEMS = {
+    re.sub(r"[^a-z0-9]", "", stem.lower())
+    for stem in COMMON_START_SCRIPT_STEMS
+}
+_COMMON_START_SCRIPT_RANKS = {
+    re.sub(r"[^a-z0-9]", "", stem.lower()): index
+    for index, stem in enumerate(COMMON_START_SCRIPT_ORDER)
+}
+
+
+class StartScriptError(RuntimeError):
+    pass
 
 
 def build_launch_args(settings: Settings) -> list[str]:
@@ -65,14 +122,28 @@ def build_launch_args(settings: Settings) -> list[str]:
     extra_args = settings.mc_extra_args.strip()
     if extra_args:
         args.extend(shlex.split(extra_args))
-    return args
+    return _with_single_nogui(args)
 
 
 def build_start_script_args(settings: Settings, start_script: Path | None = None) -> list[str]:
     script_path = start_script or settings.mc_server_dir / _start_script_name()
     if _is_windows():
-        return ["cmd.exe", "/d", "/c", "call", str(script_path)]
-    return ["bash", str(script_path)]
+        if script_path.suffix.lower() == ".ps1":
+            args = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+            ]
+        else:
+            args = ["cmd.exe", "/d", "/c", "call", str(script_path)]
+    else:
+        args = ["bash", str(script_path)]
+    if _should_pass_nogui_at_runtime(script_path):
+        args.append("nogui")
+    return args
 
 
 def build_start_bat_args(settings: Settings, start_bat: Path | None = None) -> list[str]:
@@ -80,19 +151,17 @@ def build_start_bat_args(settings: Settings, start_bat: Path | None = None) -> l
 
 
 def _ensure_start_script(server_dir: Path, settings: Settings) -> Path:
-    script_path = server_dir / _start_script_name()
-    if script_path.exists() and not is_managed_start_script(script_path):
+    scripts = discover_start_scripts(server_dir)
+    if scripts:
+        script_path = scripts[0]
+        if is_managed_start_script(script_path):
+            _write_managed_start_script(script_path, settings)
+        else:
+            _ensure_custom_start_script_runs_nogui(script_path)
         return script_path
-    content = _render_start_script(settings)
-    if script_path.exists():
-        try:
-            if script_path.read_text(encoding="utf-8") == content:
-                return script_path
-        except (OSError, UnicodeError):
-            return script_path
-    script_path.write_text(content, encoding="utf-8")
-    if not _is_windows():
-        _make_executable(script_path)
+
+    script_path = _managed_start_script_path(server_dir)
+    _write_managed_start_script(script_path, settings)
     return script_path
 
 
@@ -114,18 +183,358 @@ def is_managed_start_script(script_path: Path) -> bool:
         content = script_path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return False
-    if MANAGED_START_SCRIPT_MARKER in content:
-        return True
-    if _is_windows():
-        return content.startswith("@echo off\n") and " -jar " in content.lower()
-    return (
-        content.startswith("#!/usr/bin/env bash\nset -e\n")
-        and " -jar " in content
-    )
+    return MANAGED_START_SCRIPT_MARKER in content
 
 
 def _ensure_start_bat(server_dir: Path, settings: Settings) -> Path:
     return _ensure_start_script(server_dir, settings)
+
+
+def discover_start_scripts(
+    server_dir: Path,
+    *,
+    current_platform_only: bool = True,
+) -> list[Path]:
+    if not server_dir.is_dir():
+        return []
+
+    candidates: list[tuple[tuple[int, str], Path]] = []
+    try:
+        entries = list(server_dir.iterdir())
+    except OSError:
+        return []
+
+    for path in entries:
+        inspection = _inspect_start_script(path)
+        if inspection is None or not inspection.minecraft_script:
+            continue
+        if current_platform_only and not inspection.supported_on_current_platform:
+            continue
+        candidates.append((_start_script_sort_key(path, inspection), path))
+
+    return [path for _key, path in sorted(candidates, key=lambda item: item[0])]
+
+
+def _with_single_nogui(args: list[str]) -> list[str]:
+    without_nogui = [arg for arg in args if arg.strip().lower() != "nogui"]
+    without_nogui.append("nogui")
+    return without_nogui
+
+
+def _write_managed_start_script(script_path: Path, settings: Settings) -> None:
+    content = _render_start_script(settings)
+    try:
+        if script_path.exists() and script_path.read_text(encoding="utf-8") == content:
+            if not _is_windows():
+                _make_executable(script_path)
+            return
+    except (OSError, UnicodeError):
+        pass
+    script_path.write_text(content, encoding="utf-8")
+    if not _is_windows():
+        _make_executable(script_path)
+
+
+def _managed_start_script_path(server_dir: Path) -> Path:
+    default_path = server_dir / _start_script_name()
+    if not default_path.exists() or is_managed_start_script(default_path):
+        return default_path
+
+    suffix = ".bat" if _is_windows() else ".sh"
+    managed_path = server_dir / f"{MANAGED_START_SCRIPT_STEM}{suffix}"
+    if not managed_path.exists() or is_managed_start_script(managed_path):
+        return managed_path
+
+    index = 2
+    while True:
+        candidate = server_dir / f"{MANAGED_START_SCRIPT_STEM}_{index}{suffix}"
+        if not candidate.exists() or is_managed_start_script(candidate):
+            return candidate
+        index += 1
+
+
+def _ensure_custom_start_script_runs_nogui(script_path: Path) -> None:
+    inspection = _inspect_start_script(script_path)
+    if inspection is None:
+        raise StartScriptError(
+            f"无法读取启动脚本 {script_path.name}，已取消启动以避免 GUI 模式。"
+        )
+    if inspection.contains_nogui or inspection.forwards_args:
+        return
+    if _rewrite_simple_start_script_with_nogui(script_path):
+        return
+    raise StartScriptError(
+        f"无法保证启动脚本 {script_path.name} 会以 nogui 模式运行，已取消启动。"
+    )
+
+
+def _should_pass_nogui_at_runtime(script_path: Path) -> bool:
+    inspection = _inspect_start_script(script_path)
+    if inspection is None or inspection.managed:
+        return False
+    return inspection.forwards_args and not inspection.contains_nogui
+
+
+def _inspect_start_script(path: Path) -> StartScriptInspection | None:
+    if not path.is_file() or path.name.startswith("."):
+        return None
+    if not _is_possible_start_script_path(path):
+        return None
+    loaded = _read_script_text(path)
+    if loaded is None:
+        return None
+    content, encoding = loaded
+    command_content = _script_command_content(content)
+    supported = _is_supported_start_script(path, content)
+    managed = MANAGED_START_SCRIPT_MARKER in content
+    minecraft_script = managed or (
+        _has_start_script_shape(path, content)
+        and _looks_like_minecraft_start_script(command_content)
+    )
+    return StartScriptInspection(
+        path=path,
+        content=content,
+        encoding=encoding,
+        managed=managed,
+        minecraft_script=minecraft_script,
+        contains_nogui=_contains_nogui(command_content),
+        forwards_args=_forwards_script_args(command_content),
+        supported_on_current_platform=supported,
+    )
+
+
+def _is_possible_start_script_path(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in (*WINDOWS_START_SCRIPT_SUFFIXES, *POSIX_START_SCRIPT_SUFFIXES):
+        return True
+    if suffix:
+        return False
+    return (
+        _normalized_script_stem(path) in _NORMALIZED_COMMON_START_SCRIPT_STEMS
+        or _is_executable(path)
+    )
+
+
+def _script_command_content(content: str) -> str:
+    return "\n".join(
+        line for line in content.splitlines()
+        if not _is_script_comment_line(line.strip())
+    )
+
+
+def _read_script_text(path: Path) -> tuple[str, str] | None:
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+
+    encodings = ["utf-8-sig", locale.getpreferredencoding(False), "gbk", "cp936"]
+    tried: set[str] = set()
+    for encoding in encodings:
+        normalized = encoding.lower()
+        if normalized in tried:
+            continue
+        tried.add(normalized)
+        try:
+            decoded = raw.decode(encoding)
+            write_encoding = (
+                "utf-8"
+                if normalized == "utf-8-sig" and not raw.startswith(b"\xef\xbb\xbf")
+                else encoding
+            )
+            return decoded, write_encoding
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace"), "utf-8"
+
+
+def _has_start_script_shape(path: Path, content: str) -> bool:
+    suffix = path.suffix.lower()
+    if suffix in (*WINDOWS_START_SCRIPT_SUFFIXES, *POSIX_START_SCRIPT_SUFFIXES):
+        return True
+    if _normalized_script_stem(path) in _NORMALIZED_COMMON_START_SCRIPT_STEMS:
+        return True
+    return content.startswith("#!") or _is_executable(path)
+
+
+def _is_supported_start_script(path: Path, content: str) -> bool:
+    suffix = path.suffix.lower()
+    if _is_windows():
+        return suffix in WINDOWS_START_SCRIPT_SUFFIXES
+    if suffix in POSIX_START_SCRIPT_SUFFIXES:
+        return True
+    if suffix in WINDOWS_START_SCRIPT_SUFFIXES:
+        return False
+    return content.startswith("#!") or _is_executable(path)
+
+
+def _start_script_sort_key(
+    path: Path,
+    inspection: StartScriptInspection,
+) -> tuple[int, str]:
+    suffix = path.suffix.lower()
+    normalized_stem = _normalized_script_stem(path)
+    common_name_rank = _COMMON_START_SCRIPT_RANKS.get(normalized_stem, 20)
+    managed_rank = 10 if inspection.managed else 0
+    nogui_rank = 0 if inspection.contains_nogui else 4
+    forwards_rank = 0 if inspection.forwards_args else 2
+    suffix_rank = _script_suffix_rank(suffix) * 100
+    return (
+        suffix_rank + common_name_rank + managed_rank + nogui_rank + forwards_rank,
+        path.name.lower(),
+    )
+
+
+def _script_suffix_rank(suffix: str) -> int:
+    if _is_windows():
+        if suffix == ".bat":
+            return 0
+        if suffix == ".cmd":
+            return 1
+        if suffix == ".ps1":
+            return 20
+        return 80
+    if suffix == ".sh":
+        return 0
+    if suffix == ".command":
+        return 1
+    if suffix == ".bash":
+        return 2
+    if not suffix:
+        return 10
+    return 80
+
+
+def _normalized_script_stem(path: Path) -> str:
+    stem = path.stem if path.suffix else path.name
+    return re.sub(r"[^a-z0-9]", "", stem.lower())
+
+
+def _looks_like_minecraft_start_script(content: str) -> bool:
+    lowered = content.lower()
+    has_java = bool(re.search(r"(^|[\s\"'@])java(?:\.exe)?([\s\"']|$)", lowered, re.MULTILINE))
+    if not has_java and "bootstraplauncher" not in lowered:
+        return False
+    return any(
+        token in lowered
+        for token in (
+            "-jar",
+            "server.jar",
+            "minecraft_server",
+            "@user_jvm_args.txt",
+            "unix_args.txt",
+            "win_args.txt",
+            "bootstraplauncher",
+            "--launchtarget",
+            "forgeserver",
+            "neoforge",
+            "fabric",
+        )
+    )
+
+
+def _contains_nogui(content: str) -> bool:
+    return re.search(r"(?<![\w-])nogui(?![\w-])", content, re.IGNORECASE) is not None
+
+
+def _forwards_script_args(content: str) -> bool:
+    lowered = content.lower()
+    return any(token in lowered for token in ('"$@"', "$@", "%*", "$args"))
+
+
+def _rewrite_simple_start_script_with_nogui(script_path: Path) -> bool:
+    try:
+        raw = script_path.read_bytes()
+    except OSError:
+        return False
+    loaded = _read_script_text(script_path)
+    if loaded is None:
+        return False
+    content, encoding = loaded
+    lines = content.splitlines(keepends=True)
+    changed = False
+    rewritten: list[str] = []
+
+    for line in lines:
+        if not changed:
+            updated_line = _line_with_appended_nogui(line)
+            if updated_line is not None:
+                rewritten.append(updated_line)
+                changed = updated_line != line
+                continue
+        rewritten.append(line)
+
+    if not changed:
+        return False
+
+    _backup_start_script(script_path, raw)
+    try:
+        script_path.write_text("".join(rewritten), encoding=encoding)
+    except OSError:
+        return False
+    if not _is_windows():
+        _make_executable(script_path)
+    return True
+
+
+def _line_with_appended_nogui(line: str) -> str | None:
+    newline = ""
+    body = line
+    if body.endswith("\r\n"):
+        body, newline = body[:-2], "\r\n"
+    elif body.endswith("\n"):
+        body, newline = body[:-1], "\n"
+    elif body.endswith("\r"):
+        body, newline = body[:-1], "\r"
+
+    stripped = body.strip()
+    if not stripped or _is_script_comment_line(stripped):
+        return None
+    if _contains_nogui(stripped) or _forwards_script_args(stripped):
+        return None
+    if not _line_has_java_command(stripped):
+        return None
+    if _line_has_unsafe_continuation(stripped) or _line_has_inline_shell_comment(stripped):
+        return None
+    return f"{body} nogui{newline}"
+
+
+def _is_script_comment_line(stripped: str) -> bool:
+    lowered = stripped.lower()
+    return (
+        stripped.startswith("#")
+        or lowered.startswith("rem ")
+        or lowered == "rem"
+        or stripped.startswith("::")
+    )
+
+
+def _line_has_java_command(stripped: str) -> bool:
+    return re.search(r"(^|[\s\"'@])java(?:\.exe)?([\s\"']|$)", stripped, re.IGNORECASE) is not None
+
+
+def _line_has_unsafe_continuation(stripped: str) -> bool:
+    return stripped.endswith(("\\", "^", "|", "&")) or stripped.endswith(("&&", "||"))
+
+
+def _line_has_inline_shell_comment(stripped: str) -> bool:
+    if _is_windows():
+        return False
+    return bool(re.search(r"\s#", stripped))
+
+
+def _backup_start_script(script_path: Path, raw: bytes) -> Path:
+    backup_dir = script_path.parent / START_SCRIPT_BACKUP_DIR
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    base_name = f"{script_path.name}.{timestamp}.bak"
+    backup_path = backup_dir / base_name
+    index = 2
+    while backup_path.exists():
+        backup_path = backup_dir / f"{script_path.name}.{timestamp}.{index}.bak"
+        index += 1
+    backup_path.write_bytes(raw)
+    return backup_path
 
 
 def _ensure_server_layout(server_dir: Path) -> None:
@@ -178,8 +587,16 @@ class MinecraftServerProcess:
                 self._status_message = validation_error
                 return self._status_locked()
 
-            start_script = _ensure_start_script(self._settings.mc_server_dir, self._settings)
-            args = build_start_script_args(self._settings, start_script)
+            try:
+                start_script = _ensure_start_script(
+                    self._settings.mc_server_dir,
+                    self._settings,
+                )
+                args = build_start_script_args(self._settings, start_script)
+            except (OSError, StartScriptError) as exc:
+                self._state = "stopped"
+                self._status_message = str(exc)
+                return self._status_locked()
 
         try:
             process = self._popen_factory(args, **self._popen_kwargs())
@@ -320,11 +737,11 @@ class MinecraftServerProcess:
         server_dir = self._settings.mc_server_dir
         if not server_dir.is_dir():
             return f"服务器目录不存在: {server_dir}"
-        if (server_dir / _start_script_name()).is_file():
+        if discover_start_scripts(server_dir):
             return None
         if not self._settings.mc_server_jar.is_file():
             return (
-                f"缺少 {_start_script_name()}，且无法生成：缺少服务端核心: "
+                "未检测到可用启动脚本，且无法生成：缺少服务端核心: "
                 f"{self._settings.mc_server_jar}"
             )
         return None
@@ -506,6 +923,13 @@ def _make_executable(path: Path) -> None:
         path.chmod(path.stat().st_mode | 0o755)
     except OSError:
         pass
+
+
+def _is_executable(path: Path) -> bool:
+    try:
+        return bool(path.stat().st_mode & 0o111)
+    except OSError:
+        return False
 
 
 def _hidden_console_creationflags() -> int:

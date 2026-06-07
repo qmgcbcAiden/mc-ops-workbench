@@ -130,6 +130,29 @@ class TestReadTextPreview:
         preview = read_text_preview(root, "server.jar")
         assert "不是安全文本文件" in preview.content
 
+    def test_previews_shell_and_batch_scripts_with_script_languages(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        root = tmp_path / "server"
+        root.mkdir()
+        (root / "start.sh").write_text(
+            "#!/usr/bin/env sh\njava -jar server.jar nogui\n",
+            encoding="utf-8",
+        )
+        (root / "start.bat").write_text(
+            "@echo off\r\njava -jar server.jar nogui\r\n",
+            encoding="utf-8",
+        )
+
+        shell_preview = read_text_preview(root, "start.sh")
+        batch_preview = read_text_preview(root, "start.bat")
+
+        assert shell_preview.previewable is True
+        assert shell_preview.language == "shell"
+        assert batch_preview.previewable is True
+        assert batch_preview.language == "batch"
+
     def test_path_escape_is_blocked(self, tmp_path: Path) -> None:
         root = tmp_path / "server"
         root.mkdir()

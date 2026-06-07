@@ -24,6 +24,26 @@ _JSON_PATTERN = re.compile(
     r'[{}\[\],:])',
     re.IGNORECASE,
 )
+_SHELL_PATTERN = re.compile(
+    r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|'
+    r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|'
+    r'--?[A-Za-z0-9][A-Za-z0-9_-]*|'
+    r'\b(?:if|then|else|elif|fi|for|while|do|done|case|esac|in|function|'
+    r'export|set|unset|cd|echo|java|exec|exit)\b|'
+    r'\b-?(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b|'
+    r'[|&;<>()])',
+    re.IGNORECASE,
+)
+_BATCH_PATTERN = re.compile(
+    r'("(?:\\.|[^"\\])*"|'
+    r'%[A-Za-z0-9_]+%|%[*0-9]|'
+    r'--?[A-Za-z0-9][A-Za-z0-9_-]*|'
+    r'\b(?:if|else|for|in|do|set|setlocal|endlocal|call|goto|echo|java|'
+    r'exit|pause|rem)\b|'
+    r'\b-?(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b|'
+    r'[|&<>():])',
+    re.IGNORECASE,
+)
 
 
 def tokenize_line(line: str, language: str) -> list[SyntaxToken]:
@@ -35,6 +55,12 @@ def tokenize_line(line: str, language: str) -> list[SyntaxToken]:
         return [SyntaxToken(line, "comment")]
     if stripped.startswith("//") and normalized == "json5":
         return [SyntaxToken(line, "comment")]
+    if stripped.startswith("#") and normalized == "shell":
+        return [SyntaxToken(line, "comment")]
+    if normalized == "batch" and (
+        stripped.lower().startswith("rem ") or stripped.startswith("::")
+    ):
+        return [SyntaxToken(line, "comment")]
 
     if normalized in {"json", "json5"}:
         return _lex_json(line)
@@ -42,6 +68,10 @@ def tokenize_line(line: str, language: str) -> list[SyntaxToken]:
         return _lex_assignment(line, normalized)
     if normalized == "yaml":
         return _lex_yaml(line)
+    if normalized == "shell":
+        return _lex_script(line, _SHELL_PATTERN)
+    if normalized == "batch":
+        return _lex_script(line, _BATCH_PATTERN)
     if normalized == "markdown":
         if stripped.startswith("#"):
             return [SyntaxToken(line, "heading")]
@@ -120,6 +150,20 @@ def _lex_value(value: str) -> list[SyntaxToken]:
     return tokens or [SyntaxToken(value)]
 
 
+def _lex_script(line: str, pattern: re.Pattern[str]) -> list[SyntaxToken]:
+    tokens: list[SyntaxToken] = []
+    cursor = 0
+    for match in pattern.finditer(line):
+        if match.start() > cursor:
+            tokens.append(SyntaxToken(line[cursor:match.start()]))
+        text = match.group(0)
+        tokens.append(SyntaxToken(text, _script_role(text)))
+        cursor = match.end()
+    if cursor < len(line):
+        tokens.append(SyntaxToken(line[cursor:]))
+    return tokens or [SyntaxToken(line)]
+
+
 def _value_role(value: str) -> str:
     lowered = value.lower()
     if value.startswith(("\"", "'")):
@@ -129,5 +173,25 @@ def _value_role(value: str) -> str:
     if re.fullmatch(r"-?(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)", value):
         return "number"
     if value in "{}[],:":
+        return "operator"
+    return "plain"
+
+
+def _script_role(value: str) -> str:
+    lowered = value.lower()
+    if value.startswith(("\"", "'")):
+        return "string"
+    if value.startswith("$") or value.startswith("%"):
+        return "key"
+    if lowered in {
+        "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+        "case", "esac", "in", "function", "export", "set", "unset", "cd",
+        "echo", "java", "exec", "exit", "setlocal", "endlocal", "call",
+        "goto", "pause", "rem",
+    }:
+        return "keyword"
+    if re.fullmatch(r"-?(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)", value):
+        return "number"
+    if value.startswith("-") or value in "|&;<>():":
         return "operator"
     return "plain"

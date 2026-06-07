@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from pathlib import Path
 
 from tests.fixtures.fake_mc_server import create_fake_mc_server
+from src.mc import server_process
 from src.db.connection import get_connection
 from src.db.migrate import run_migrations
 from src.repositories.runtime_repository import ServerRuntimeRepository
@@ -166,6 +168,75 @@ class TestServerService:
             service = ServerService(repo, settings)
             result = service.send_command("list")
             assert result["status"] == "failed"
+        finally:
+            conn.close()
+
+    def test_start_uses_non_default_modpack_script_and_passes_nogui(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: False)
+        server_dir = tmp_path / "mc_server"
+        server_dir.mkdir()
+        script_path = server_dir / "run.sh"
+        script_path.write_text(
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$@\" > dashboard_args.txt\n"
+            "echo java -jar server.jar \"$@\"\n"
+            "sleep 3\n",
+            encoding="utf-8",
+        )
+        script_path.chmod(0o755)
+
+        db_path = tmp_path / "app.db"
+        run_migrations(str(db_path))
+        conn = get_connection(str(db_path))
+        service: ServerService | None = None
+        try:
+            repo = ServerRuntimeRepository(conn)
+            settings = _make_settings(tmp_path, server_dir)
+            service = ServerService(repo, settings)
+            result = service.start_server()
+
+            args_path = server_dir / "dashboard_args.txt"
+            for _ in range(20):
+                if args_path.exists():
+                    break
+                time.sleep(0.05)
+
+            assert result["state"] == "starting"
+            assert args_path.read_text(encoding="utf-8").strip() == "nogui"
+            assert repo.list_recent(limit=1)[0]["event_type"] == "start"
+        finally:
+            if service is not None:
+                service.shutdown_server(force=True)
+            conn.close()
+
+    def test_start_reports_error_when_custom_script_cannot_be_forced_to_nogui(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        monkeypatch.setattr(server_process, "_is_windows", lambda: False)
+        server_dir = tmp_path / "mc_server"
+        server_dir.mkdir()
+        (server_dir / "run.sh").write_text(
+            "#!/usr/bin/env sh\njava \\\n  -jar server.jar\n",
+            encoding="utf-8",
+        )
+
+        db_path = tmp_path / "app.db"
+        run_migrations(str(db_path))
+        conn = get_connection(str(db_path))
+        try:
+            repo = ServerRuntimeRepository(conn)
+            settings = _make_settings(tmp_path, server_dir)
+            result = ServerService(repo, settings).start_server()
+
+            assert result["state"] == "stopped"
+            assert "nogui" in result["message"]
+            assert repo.list_recent(limit=1)[0]["message"] == result["message"]
         finally:
             conn.close()
 

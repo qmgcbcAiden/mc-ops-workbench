@@ -25,9 +25,12 @@ PREVIEW_EXTENSIONS = {
     ".ini",
     ".md",
     ".csv",
+    ".sh",
+    ".bat",
 }
 
 LANGUAGE_BY_EXTENSION = {
+    ".bat": "batch",
     ".cfg": "properties",
     ".conf": "config",
     ".ini": "ini",
@@ -38,6 +41,7 @@ LANGUAGE_BY_EXTENSION = {
     ".log": "log",
     ".md": "markdown",
     ".properties": "properties",
+    ".sh": "shell",
     ".toml": "toml",
     ".txt": "text",
     ".yaml": "yaml",
@@ -46,7 +50,7 @@ LANGUAGE_BY_EXTENSION = {
 
 EDITABLE_EXTENSIONS = {
     ".properties", ".json", ".json5", ".mcmeta", ".yml", ".yaml", ".toml",
-    ".cfg", ".conf", ".ini", ".txt", ".md", ".csv",
+    ".cfg", ".conf", ".ini", ".txt", ".md", ".csv", ".sh", ".bat",
 }
 
 VERSIONED_CONFIG_EXTENSIONS = {
@@ -79,6 +83,8 @@ ICON_BY_EXTENSION = {
     ".ini": "article",
     ".md": "article",
     ".csv": "article",
+    ".sh": "terminal",
+    ".bat": "terminal",
 }
 
 

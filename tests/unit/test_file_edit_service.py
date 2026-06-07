@@ -28,6 +28,10 @@ class TestIsEditable:
         assert is_editable("pack.mcmeta") is True
         assert is_editable("settings.ini") is True
 
+    def test_shell_and_batch_scripts_are_editable(self):
+        assert is_editable("start.sh") is True
+        assert is_editable("start.bat") is True
+
     def test_jar_is_not_editable(self):
         assert is_editable("server.jar") is False
 
@@ -116,6 +120,19 @@ class TestSaveTextFile:
         assert file_path.read_text(encoding="utf-8") == (
             '[\n  {\n    "name": "Aiden233",\n    "level": 4\n  }\n]\n'
         )
+
+    def test_save_script_without_auto_formatting(self, tmp_path: Path):
+        root = tmp_path / "mc_server"
+        root.mkdir()
+        file_path = root / "start.sh"
+        file_path.write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+        content = "java   -jar server.jar nogui"
+
+        result = save_text_file(root, "start.sh", content, create_backup=False)
+
+        assert result["status"] == "saved"
+        assert result["formatted"] is False
+        assert file_path.read_text(encoding="utf-8") == content
 
     def test_save_creates_backup(self, tmp_path: Path):
         root = tmp_path / "mc_server"

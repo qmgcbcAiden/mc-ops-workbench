@@ -433,11 +433,12 @@ class JavaEnvironmentService:
         )
 
     def _custom_start_script_warning(self) -> str | None:
-        from src.mc.server_process import is_managed_start_script, start_script_name
+        from src.mc.server_process import discover_start_scripts, is_managed_start_script
 
-        script_path = self._settings.mc_server_dir / start_script_name()
-        if not script_path.exists():
+        scripts = discover_start_scripts(self._settings.mc_server_dir)
+        if not scripts:
             return None
+        script_path = scripts[0]
         if is_managed_start_script(script_path):
             return None
         return (
