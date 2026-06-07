@@ -97,6 +97,7 @@ class ChatPanel:
         self._draft_attachments: list[dict] = []
         self._next_draft_attachment_id = 1
         self._last_input_value = ""
+        self._model_refresh_generation = 0
 
         self.chat_feed = ft.ListView(expand=True, spacing=6, padding=0, auto_scroll=True)
         self._history_list = ft.Column(spacing=6, scroll=ft.ScrollMode.AUTO)
@@ -212,7 +213,10 @@ class ChatPanel:
         getter = getattr(self._interface, "get_selected_ai_model", None)
         if callable(getter):
             try:
-                model = getter()
+                try:
+                    model = getter(discover=False)
+                except TypeError:
+                    model = getter()
                 if isinstance(model, dict) and model.get("id"):
                     return model
             except Exception:
@@ -231,7 +235,10 @@ class ChatPanel:
         lister = getattr(self._interface, "list_ai_models", None)
         if callable(lister):
             try:
-                models = lister()
+                try:
+                    models = lister(discover=False)
+                except TypeError:
+                    models = lister()
                 if isinstance(models, list) and models:
                     return [model for model in models if isinstance(model, dict)]
             except Exception:
@@ -295,6 +302,32 @@ class ChatPanel:
         self._model_selector_button.content = _model_selector_content(self._selected_model)
         self._model_selector_button.items = self._model_menu_items()
         self._model_selector_button.disabled = self._streaming
+
+    def refresh_ai_models(self) -> None:
+        lister = getattr(self._interface, "list_ai_models", None)
+        if not callable(lister):
+            return
+        self._model_refresh_generation += 1
+        generation = self._model_refresh_generation
+
+        def worker() -> None:
+            try:
+                try:
+                    lister(refresh=True)
+                except TypeError:
+                    lister()
+            except Exception:
+                return
+            if generation != self._model_refresh_generation:
+                return
+            self._sync_model_selector()
+            self._safe_update(self._model_selector_button)
+
+        run_thread = getattr(self._page, "run_thread", None)
+        if callable(run_thread):
+            run_thread(worker)
+            return
+        threading.Thread(target=worker, daemon=True).start()
 
     def _set_streaming(self, streaming: bool) -> None:
         self._streaming = streaming

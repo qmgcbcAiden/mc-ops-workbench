@@ -82,15 +82,17 @@ class ChatService:
         self,
         include_disabled: bool = False,
         refresh: bool = False,
+        discover: bool = True,
     ) -> list[dict]:
         if self._ai_models is None:
             return []
         return self._ai_models.list_models(
             refresh=refresh,
             include_disabled=include_disabled,
+            discover=discover,
         )
 
-    def get_selected_ai_model(self) -> dict:
+    def get_selected_ai_model(self, discover: bool = True) -> dict:
         if self._ai_models is None:
             model = getattr(self._llm, "model", "")
             return {
@@ -101,7 +103,7 @@ class ChatService:
                 "selected": True,
                 "configured": self.has_ai,
             }
-        return self._ai_models.get_selected_model()
+        return self._ai_models.get_selected_model(discover=discover)
 
     def select_ai_model(self, model_id: str) -> dict:
         if self._ai_models is None:

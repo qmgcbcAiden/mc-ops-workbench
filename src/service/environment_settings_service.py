@@ -207,16 +207,25 @@ class EnvironmentSettingsService:
             "status": "ok",
             "provider": normalized,
             "model_count": len(models),
+            "models": models,
             "message": f"连接成功，发现 {len(models)} 个可用模型。",
         }
 
     def save_basic_settings(self, payload: Mapping[str, Any]) -> dict[str, Any]:
-        current = self.inspect()
+        settings = load_settings(
+            env_file=self._env_path,
+            environ=self._environ,
+            project_root=self._project_root,
+        )
+        current_provider = _normalized_provider(
+            settings.ai_default_provider,
+            settings=settings,
+        )
         provider_payloads = list(payload.get("providers") or [])
         if provider_payloads:
             updates, default_provider = self._provider_updates_from_payloads(
                 provider_payloads,
-                preferred_default=str(payload.get("provider") or current["provider"]),
+                preferred_default=str(payload.get("provider") or current_provider),
             )
         else:
             default_provider = _normalized_provider(str(payload.get("provider") or ""))
@@ -238,7 +247,7 @@ class EnvironmentSettingsService:
                 updates[provider_config["api_key"]] = api_key
 
         server_dir_value = str(
-            payload.get("server_dir") or current["server_dir"]
+            payload.get("server_dir") or settings.mc_server_dir
         ).strip()
         server_dir = _resolve_path(server_dir_value, self._project_root)
         updates["MC_SERVER_DIR"] = _portable_path(server_dir, self._project_root)
@@ -259,7 +268,7 @@ class EnvironmentSettingsService:
         if java_path:
             updates["MC_JAVA_PATH"] = java_path
 
-        if not current["rcon_configured"]:
+        if not _is_secret_configured(settings.mc_rcon_password):
             updates["MC_RCON_PASSWORD"] = secrets.token_urlsafe(24)
 
         locked_fields = {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -68,6 +69,9 @@ class EnvironmentSettingsDialog:
         self._locked_fields: set[str] = set()
         self._provider_rows: list[_ProviderRow] = []
         self._model_checkboxes: list[ft.Checkbox] = []
+        self._model_entries: dict[str, dict[str, Any]] = {}
+        self._model_list: ft.Column | None = None
+        self._model_refresh_generation = 0
         self._player_ai_entries: list[dict] = []
         self._player_ai_known_players: list[dict] = []
 
@@ -276,6 +280,7 @@ class EnvironmentSettingsDialog:
         )
         self._dialog = dialog
         self._show(dialog)
+        self._refresh_models_silently()
 
     def _make_provider_row(self, provider: dict[str, Any]) -> _ProviderRow:
         provider_id = str(provider.get("id") or "deepseek")
@@ -338,6 +343,12 @@ class EnvironmentSettingsDialog:
             ),
         )
         row.kind.on_select = lambda _event, target=row: self._on_provider_kind_change(target)
+        row.api_key.on_change = (
+            lambda _event, target=row: self._schedule_provider_model_refresh(target)
+        )
+        row.base_url.on_change = (
+            lambda _event, target=row: self._schedule_provider_model_refresh(target)
+        )
         self._apply_provider_lock(row)
         return row
 
@@ -381,35 +392,30 @@ class EnvironmentSettingsDialog:
         )
 
     def _build_model_settings(self) -> ft.Control:
-        self._model_checkboxes = []
-        controls: list[ft.Control] = [
-            ft.Text(
-                "只勾选常用模型，聊天输入框的模型菜单会只显示已启用模型。",
-                size=11,
-                color=theme.MUTED,
-            )
-        ]
+        models: list[dict] = []
         if self._chat is None:
-            controls.append(ft.Text("模型服务未接入。", size=12, color=theme.MUTED))
+            message = "模型服务未接入。"
         else:
             try:
-                models = self._chat.list_ai_models(include_disabled=True)
+                try:
+                    models = self._chat.list_ai_models(
+                        include_disabled=True,
+                        discover=False,
+                    )
+                except TypeError:
+                    models = self._chat.list_ai_models(include_disabled=True)
+                message = ""
             except Exception as exc:
                 models = []
-                controls.append(ft.Text(f"无法读取模型列表：{exc}", size=12, color=theme.RED))
-            for model in models:
-                checkbox = ft.Checkbox(
-                    label=f"{model.get('provider', '')} · {model.get('display_name') or model.get('id')}",
-                    value=bool(model.get("enabled", True)),
-                    data=model.get("selection_id") or model.get("id"),
-                    fill_color=theme.BLUE,
-                    check_color="#ffffff",
-                    label_style=ft.TextStyle(color=theme.TEXT, size=12),
-                )
-                self._model_checkboxes.append(checkbox)
-                controls.append(checkbox)
-            if not models:
-                controls.append(ft.Text("配置 API Key 后可在这里管理可用模型。", size=12, color=theme.MUTED))
+                message = f"无法读取模型列表：{exc}"
+
+        self._model_entries = {
+            str(model.get("selection_id") or model.get("id")): dict(model)
+            for model in models
+            if isinstance(model, dict) and (model.get("selection_id") or model.get("id"))
+        }
+        self._model_list = ft.Column(spacing=6)
+        self._render_model_list(message=message)
 
         return ft.ExpansionTile(
             title=ft.Text("启用模型", size=13, color=theme.TEXT),
@@ -417,7 +423,7 @@ class EnvironmentSettingsDialog:
             leading=ft.Icon(ft.Icons.CHECKLIST, color=theme.MUTED, size=18),
             controls=[
                 ft.Container(
-                    content=ft.Column(controls=controls, spacing=6),
+                    content=self._model_list,
                     padding=ft.Padding.only(left=10, right=10, bottom=10),
                 )
             ],
@@ -430,6 +436,150 @@ class EnvironmentSettingsDialog:
             shape=ft.RoundedRectangleBorder(radius=7),
             collapsed_shape=ft.RoundedRectangleBorder(radius=7),
         )
+
+    def _render_model_list(self, *, message: str = "") -> None:
+        if self._model_list is None:
+            return
+        selected_values = {
+            str(checkbox.data): bool(checkbox.value)
+            for checkbox in self._model_checkboxes
+        }
+        controls: list[ft.Control] = [
+            ft.Text(
+                "只勾选常用模型，聊天输入框的模型菜单会只显示已启用模型。",
+                size=11,
+                color=theme.MUTED,
+            )
+        ]
+        self._model_checkboxes = []
+        provider_order = {
+            row.provider_id: index
+            for index, row in enumerate(self._provider_rows)
+        }
+        ordered_entries = sorted(
+            self._model_entries.items(),
+            key=lambda item: provider_order.get(
+                str(item[1].get("provider") or ""),
+                len(provider_order),
+            ),
+        )
+        for selection_id, model in ordered_entries:
+            checkbox = ft.Checkbox(
+                label=(
+                    f"{model.get('provider', '')} · "
+                    f"{model.get('display_name') or model.get('id')}"
+                ),
+                value=selected_values.get(
+                    selection_id,
+                    bool(model.get("enabled", False)),
+                ),
+                data=selection_id,
+                fill_color=theme.BLUE,
+                check_color="#ffffff",
+                label_style=ft.TextStyle(color=theme.TEXT, size=12),
+            )
+            self._model_checkboxes.append(checkbox)
+            controls.append(checkbox)
+        if message:
+            controls.append(ft.Text(message, size=12, color=theme.MUTED))
+        elif not self._model_entries:
+            controls.append(
+                ft.Text(
+                    "配置 API Key 后会自动刷新可用模型。",
+                    size=12,
+                    color=theme.MUTED,
+                )
+            )
+        self._model_list.controls = controls
+
+    def _merge_provider_models(
+        self,
+        provider: str,
+        model_ids: list[str],
+        *,
+        fallback_model: str = "",
+    ) -> None:
+        normalized = provider.strip().lower()
+        self._model_entries = {
+            selection_id: model
+            for selection_id, model in self._model_entries.items()
+            if str(model.get("provider") or "").strip().lower() != normalized
+        }
+        for index, model_id in enumerate(model_ids):
+            clean_id = str(model_id).strip()
+            if not clean_id:
+                continue
+            selection_id = f"{normalized}::{clean_id}"
+            self._model_entries[selection_id] = {
+                "id": clean_id,
+                "selection_id": selection_id,
+                "provider": normalized,
+                "display_name": clean_id,
+                "enabled": clean_id == fallback_model or (
+                    not fallback_model and index == 0
+                ),
+            }
+        self._render_model_list()
+        self._update()
+
+    def _refresh_models_silently(self) -> None:
+        if self._chat is None:
+            return
+        self._model_refresh_generation += 1
+        generation = self._model_refresh_generation
+
+        def worker() -> None:
+            try:
+                try:
+                    models = self._chat.list_ai_models(
+                        include_disabled=True,
+                        refresh=True,
+                    )
+                except TypeError:
+                    models = self._chat.list_ai_models(include_disabled=True)
+            except Exception:
+                return
+            if generation != self._model_refresh_generation:
+                return
+            self._model_entries = {
+                str(model.get("selection_id") or model.get("id")): dict(model)
+                for model in models
+                if isinstance(model, dict)
+                and (model.get("selection_id") or model.get("id"))
+            }
+            self._render_model_list()
+            self._update()
+
+        self._run_thread(worker)
+
+    def _schedule_provider_model_refresh(self, row: _ProviderRow) -> None:
+        api_key = str(row.api_key.value or "").strip()
+        base_url = str(row.base_url.value or "").strip()
+        if not api_key or not base_url.startswith(("http://", "https://")):
+            return
+        self._model_refresh_generation += 1
+        generation = self._model_refresh_generation
+
+        def worker() -> None:
+            time.sleep(0.6)
+            if generation != self._model_refresh_generation:
+                return
+            result = self._interface.test_ai_connection(
+                row.provider_id,
+                api_key,
+                base_url,
+            )
+            if (
+                generation == self._model_refresh_generation
+                and result.get("status") == "ok"
+            ):
+                self._merge_provider_models(
+                    row.provider_id,
+                    list(result.get("models") or []),
+                    fallback_model=str(row.fallback_model.value or "").strip(),
+                )
+
+        self._run_thread(worker)
 
     def _on_provider_kind_change(self, row: _ProviderRow) -> None:
         kind = str(row.kind.value or "deepseek")
@@ -782,6 +932,8 @@ class EnvironmentSettingsDialog:
             self._update()
 
     def _test_connection(self, row: _ProviderRow) -> None:
+        self._model_refresh_generation += 1
+        generation = self._model_refresh_generation
         self._set_busy(testing=True)
         row.status.value = "正在测试连接..."
         row.status.color = theme.MUTED
@@ -793,9 +945,17 @@ class EnvironmentSettingsDialog:
                 row.api_key.value or "",
                 row.base_url.value or "",
             )
+            if generation != self._model_refresh_generation:
+                return
             self._set_busy(testing=False)
             row.status.value = str(result.get("message") or "测试完成。")
             row.status.color = theme.GREEN if result.get("status") == "ok" else theme.RED
+            if result.get("status") == "ok":
+                self._merge_provider_models(
+                    row.provider_id,
+                    list(result.get("models") or []),
+                    fallback_model=str(row.fallback_model.value or "").strip(),
+                )
             self._update()
 
         self._run_thread(worker)
@@ -816,33 +976,38 @@ class EnvironmentSettingsDialog:
         self._run_thread(worker)
 
     def _save(self, _event=None) -> None:
+        self._model_refresh_generation += 1
         self._set_busy(saving=True)
-        try:
-            if self._player_ai_chat is not None:
-                self._player_ai_chat.save_settings(self._player_ai_payload())
-            result = self._interface.save_basic_settings(
-                {
-                    "provider": self._inspection.get("provider"),
-                    "providers": self._provider_payloads(),
-                    "server_dir": self._server_dir.value,
-                    "java_xmx": self._java_xmx.value,
-                    "server_jar": self._server_jar.value,
-                    "java_path": self._java_path.value,
-                }
-            )
-            if self._chat is not None and self._model_checkboxes:
-                self._chat.set_enabled_ai_models([
-                    str(checkbox.data)
-                    for checkbox in self._model_checkboxes
-                    if checkbox.value
-                ])
-        except Exception as exc:
-            self._set_busy(saving=False)
-            self._set_feedback(str(exc), error=True)
-            return
-        self._close()
-        if self._on_saved is not None:
-            self._on_saved(result)
+
+        def worker() -> None:
+            try:
+                if self._player_ai_chat is not None:
+                    self._player_ai_chat.save_settings(self._player_ai_payload())
+                result = self._interface.save_basic_settings(
+                    {
+                        "provider": self._inspection.get("provider"),
+                        "providers": self._provider_payloads(),
+                        "server_dir": self._server_dir.value,
+                        "java_xmx": self._java_xmx.value,
+                        "server_jar": self._server_jar.value,
+                        "java_path": self._java_path.value,
+                    }
+                )
+                if self._chat is not None and self._model_checkboxes:
+                    self._chat.set_enabled_ai_models([
+                        str(checkbox.data)
+                        for checkbox in self._model_checkboxes
+                        if checkbox.value
+                    ])
+            except Exception as exc:
+                self._set_busy(saving=False)
+                self._set_feedback(str(exc), error=True)
+                return
+            self._close()
+            if self._on_saved is not None:
+                self._on_saved(result)
+
+        self._run_thread(worker)
 
     def _provider_payloads(self) -> list[dict[str, Any]]:
         payloads = []

@@ -82,7 +82,11 @@ class _EnvironmentStub:
 
     def test_ai_connection(self, provider, api_key, base_url) -> dict:
         self.connections.append((provider, api_key, base_url))
-        return {"status": "ok", "message": "连接成功，发现 2 个可用模型。"}
+        return {
+            "status": "ok",
+            "models": [f"{provider}-chat", f"{provider}-reasoner"],
+            "message": "连接成功，发现 2 个可用模型。",
+        }
 
     def save_basic_settings(self, payload) -> dict:
         self.saved.append(payload)
@@ -288,9 +292,45 @@ def test_connection_and_java_actions_update_feedback_without_network() -> None:
     ]
     assert "发现 2 个可用模型" in row.status.value
     assert row.status.color == theme.GREEN
+    assert [checkbox.data for checkbox in dialog_controller._model_checkboxes] == [
+        "deepseek::deepseek-chat",
+        "deepseek::deepseek-reasoner",
+        "qwen::qwen-max",
+    ]
 
     dialog_controller._prepare_java()
     assert dialog_controller._java_path.value == "/detected/java"
+
+
+def test_api_key_change_silently_refreshes_provider_models(monkeypatch) -> None:
+    page = _PageStub()
+    environment = _EnvironmentStub()
+    dialog_controller = EnvironmentSettingsDialog(
+        page,
+        environment,
+        _JavaStub(),
+        _ChatStub(),
+    )
+    dialog_controller.show()
+    monkeypatch.setattr(
+        "src.ui.components.environment_settings_dialog.time.sleep",
+        lambda _seconds: None,
+    )
+
+    row = dialog_controller._provider_rows[0]
+    row.api_key.value = "updated-secret"
+    dialog_controller._schedule_provider_model_refresh(row)
+
+    assert environment.connections[-1] == (
+        "deepseek",
+        "updated-secret",
+        "https://api.deepseek.com",
+    )
+    assert [checkbox.data for checkbox in dialog_controller._model_checkboxes] == [
+        "deepseek::deepseek-chat",
+        "deepseek::deepseek-reasoner",
+        "qwen::qwen-max",
+    ]
 
 
 def test_player_ai_settings_load_add_and_save_with_basic_settings() -> None:

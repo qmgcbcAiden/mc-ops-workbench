@@ -253,6 +253,58 @@ def test_model_discovery_is_cached_and_can_be_refreshed(tmp_path: Path) -> None:
     assert len(calls) == 3
 
 
+def test_non_discovery_model_view_uses_fallback_without_network(tmp_path: Path) -> None:
+    service, _repo = _service(
+        tmp_path,
+        {
+            "QWEN_API_KEY": "qwen-key",
+            "QWEN_BASE_URL": "https://qwen.example.com/v1",
+            "QWEN_MODEL": "qwen-plus",
+        },
+        model_lister=lambda _config: pytest.fail("discovery should be deferred"),
+    )
+
+    models = service.list_models(include_disabled=True, discover=False)
+    selected = service.get_selected_model(discover=False)
+
+    assert [(model["id"], model["source"]) for model in models] == [
+        ("qwen-plus", "config")
+    ]
+    assert selected["selection_id"] == "qwen::qwen-plus"
+
+
+def test_non_discovery_request_config_honors_stored_model_selection(
+    tmp_path: Path,
+) -> None:
+    service, repo = _service(
+        tmp_path,
+        {
+            "QWEN_API_KEY": "qwen-key",
+            "QWEN_BASE_URL": "https://qwen.example.com/v1",
+            "QWEN_MODEL": "qwen-plus",
+        },
+        model_lister=lambda _config: pytest.fail("discovery should be deferred"),
+    )
+    repo.set("selected_ai_model", "qwen::qwen-max")
+
+    config = service.get_request_config()
+
+    assert config.provider == "qwen"
+    assert config.model == "qwen-max"
+
+
+def test_enabled_models_can_be_saved_before_new_provider_is_reloaded(
+    tmp_path: Path,
+) -> None:
+    service, repo = _service(tmp_path)
+
+    service.set_enabled_models(["qwen::qwen-plus", "qwen::qwen-max"])
+
+    assert repo.get("enabled_ai_models") == (
+        '["qwen::qwen-max", "qwen::qwen-plus"]'
+    )
+
+
 def test_select_model_rejects_unknown_model(tmp_path: Path) -> None:
     service, _repo = _service(
         tmp_path,

@@ -251,14 +251,16 @@ class ChatInterface:
         self,
         include_disabled: bool = False,
         refresh: bool = False,
+        discover: bool = True,
     ) -> list[dict]:
         return self.chat_service.list_ai_models(
             include_disabled=include_disabled,
             refresh=refresh,
+            discover=discover,
         )
 
-    def get_selected_ai_model(self) -> dict:
-        return self.chat_service.get_selected_ai_model()
+    def get_selected_ai_model(self, discover: bool = True) -> dict:
+        return self.chat_service.get_selected_ai_model(discover=discover)
 
     def select_ai_model(self, model_id: str) -> dict:
         return self.chat_service.select_ai_model(model_id)

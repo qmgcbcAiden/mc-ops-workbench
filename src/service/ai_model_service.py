@@ -62,9 +62,10 @@ class AiModelService:
         refresh: bool = False,
         *,
         include_disabled: bool = False,
+        discover: bool = True,
     ) -> list[dict]:
-        models = self._available_models(refresh=refresh)
-        selected = self._resolve_selected_model(models=models)
+        models = self._available_models(refresh=refresh, discover=discover)
+        selected = self._resolve_selected_model(models=models, discover=discover)
         if not models:
             models = [selected]
         elif not any(model.selection_id == selected.selection_id for model in models):
@@ -91,8 +92,8 @@ class AiModelService:
         self._cache.clear()
         return self.list_models(refresh=True, include_disabled=include_disabled)
 
-    def get_selected_model(self) -> dict:
-        model = self._resolve_selected_model()
+    def get_selected_model(self, *, discover: bool = True) -> dict:
+        model = self._resolve_selected_model(discover=discover)
         return self._model_view(
             model,
             selected_selection_id=model.selection_id,
@@ -119,24 +120,24 @@ class AiModelService:
         )
 
     def set_enabled_models(self, selections: list[str]) -> list[dict]:
-        models = self._available_models()
+        models = self._available_models(discover=False)
         known_ids = {model.selection_id for model in models}
         selected_ids = {
             str(selection).strip()
             for selection in selections
-            if str(selection).strip() in known_ids
+            if decode_model_selection(str(selection).strip()) is not None
         }
-        selected = self._resolve_selected_model(models=models)
+        selected = self._resolve_selected_model(models=models, discover=False)
         if selected.selection_id in known_ids:
             selected_ids.add(selected.selection_id)
         self._app_settings.set(
             ENABLED_AI_MODELS_SETTING_KEY,
             json.dumps(sorted(selected_ids), ensure_ascii=True),
         )
-        return self.list_models(include_disabled=True)
+        return self.list_models(include_disabled=True, discover=False)
 
     def get_request_config(self) -> LlmRequestConfig:
-        model = self._resolve_selected_model()
+        model = self._resolve_selected_model(discover=False)
         provider = self._provider_config(model.provider)
         return LlmRequestConfig(
             provider=provider.id,
@@ -158,9 +159,10 @@ class AiModelService:
         self,
         *,
         models: list[AiModelDefinition] | None = None,
+        discover: bool = True,
     ) -> AiModelDefinition:
         if models is None:
-            models = self._available_models()
+            models = self._available_models(discover=discover)
         configured_providers = {
             provider.id
             for provider in self._provider_configs()
@@ -173,6 +175,12 @@ class AiModelService:
             match = _find_model(models, *stored_selection)
             if match is not None:
                 return match
+            if not discover:
+                return make_ai_model_definition(
+                    stored_selection[0],
+                    stored_selection[1],
+                    source="config",
+                )
 
         if stored and stored_selection is None:
             match = _find_legacy_model(models, stored)
@@ -215,14 +223,25 @@ class AiModelService:
             raise ValueError(f"Unsupported or unavailable AI model: {selection}")
         return match
 
-    def _available_models(self, refresh: bool = False) -> list[AiModelDefinition]:
+    def _available_models(
+        self,
+        refresh: bool = False,
+        *,
+        discover: bool = True,
+    ) -> list[AiModelDefinition]:
         # TODO(auth): apply account-level model filtering when application
         # authentication exists. Provider credentials remain the current gate.
         self._is_authenticated()
         models: list[AiModelDefinition] = []
         for provider in self._provider_configs():
             if self._is_provider_configured(provider):
-                models.extend(self._models_for_provider(provider, refresh=refresh))
+                models.extend(
+                    self._models_for_provider(
+                        provider,
+                        refresh=refresh,
+                        discover=discover,
+                    )
+                )
         return models
 
     def _models_for_provider(
@@ -230,11 +249,29 @@ class AiModelService:
         provider: _ProviderConfig,
         *,
         refresh: bool,
+        discover: bool,
     ) -> list[AiModelDefinition]:
         now = self._clock()
         cached = self._cache.get(provider.id)
-        if not refresh and cached is not None and cached.expires_at > now:
+        if (
+            not refresh
+            and cached is not None
+            and (cached.expires_at > now or not discover)
+        ):
             return list(cached.models)
+
+        if not discover:
+            return (
+                [
+                    make_ai_model_definition(
+                        provider.id,
+                        provider.fallback_model,
+                        source="config",
+                    )
+                ]
+                if provider.fallback_model.strip()
+                else []
+            )
 
         try:
             discovered_ids = self._model_lister(

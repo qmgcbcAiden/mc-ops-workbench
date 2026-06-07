@@ -22,6 +22,11 @@ class _JavaEnvironmentStub:
         }
 
 
+class _UnexpectedJavaEnvironmentStub:
+    def check_environment(self) -> dict:
+        raise AssertionError("save should not run Java environment discovery")
+
+
 def _write_example(path: Path) -> None:
     path.write_text(
         "# keep this comment\n"
@@ -317,10 +322,31 @@ def test_ai_connection_uses_supplied_secret_but_never_returns_it(tmp_path: Path)
         "status": "ok",
         "provider": "qwen",
         "model_count": 2,
+        "models": ["model-a", "model-b"],
         "message": "连接成功，发现 2 个可用模型。",
     }
     assert captured["api_key"] == "temporary-secret"
     assert "temporary-secret" not in str(result)
+
+
+def test_save_does_not_repeat_expensive_java_inspection(tmp_path: Path) -> None:
+    _write_example(tmp_path / ".env")
+    service = EnvironmentSettingsService(
+        project_root=tmp_path,
+        environ={},
+        java_environment_service=_UnexpectedJavaEnvironmentStub(),
+    )
+
+    result = service.save_basic_settings(
+        {
+            "provider": "deepseek",
+            "base_url": "https://api.deepseek.com",
+            "server_dir": "mc_server",
+            "java_xmx": "2G",
+        }
+    )
+
+    assert result["status"] == "saved"
 
 
 def test_memory_recommendation_is_bounded_for_new_users() -> None:

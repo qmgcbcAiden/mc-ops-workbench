@@ -979,6 +979,9 @@ class OpsHomePage:
         player_ai_chat = getattr(self.interfaces, "player_ai_chat", None)
         if player_ai_chat is not None:
             player_ai_chat.start()
+        refresh_ai_models = getattr(self.chat_panel, "refresh_ai_models", None)
+        if callable(refresh_ai_models):
+            refresh_ai_models()
         self._refresh_dashboard_snapshot()
         self._start_dashboard_polling()
 
