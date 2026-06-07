@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import io
 import shutil
+import urllib.error
 import zipfile
+from unittest.mock import patch
 
 from src.config.settings import Settings
 from src.db.connection import get_connection
@@ -11,6 +14,7 @@ from src.db.migrate import run_migrations
 from src.repositories.app_settings_repository import AppSettingsRepository
 from src.repositories.java_environment_repository import JavaEnvironmentRepository
 from src.service.java_environment_service import (
+    AdoptiumDownloader,
     JavaCandidate,
     AdoptiumAsset,
     JavaEnvironmentService,
@@ -245,6 +249,54 @@ def test_portable_installer_verifies_archive_and_installs_java_home(tmp_path: Pa
     assert candidate.java_home.parent == settings.java_auto_install_dir
     assert candidate.java_home.name.startswith("temurin-21-")
     assert candidate.java_path.exists()
+
+
+def test_adoptium_downloader_uses_stable_binary_url_and_request_headers() -> None:
+    payload = b"""[
+        {
+            "binary": {
+                "package": {
+                    "link": "https://github.com/adoptium/example.zip",
+                    "name": "temurin.zip",
+                    "checksum": "abc123"
+                }
+            }
+        }
+    ]"""
+
+    with patch("urllib.request.urlopen", return_value=io.BytesIO(payload)) as urlopen:
+        asset = AdoptiumDownloader().resolve_asset(21, "windows", "x64", "jre")
+
+    assert asset is not None
+    assert asset.link == (
+        "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/"
+        "jre/hotspot/normal/eclipse"
+    )
+    request = urlopen.call_args.args[0]
+    assert request.get_header("User-agent") == "MinecraftServerDashboard/1.0"
+    assert request.get_header("Cache-control") == "no-cache"
+    assert request.get_header("Accept") == "application/json"
+
+
+def test_adoptium_downloader_retries_download_once_after_403(tmp_path: Path) -> None:
+    error = urllib.error.HTTPError(
+        "https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/"
+        "hotspot/normal/eclipse",
+        403,
+        "Forbidden",
+        {},
+        None,
+    )
+    target = tmp_path / "temurin.zip"
+
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=[error, io.BytesIO(b"archive")],
+    ) as urlopen:
+        AdoptiumDownloader().download(error.url, target)
+
+    assert urlopen.call_count == 2
+    assert target.read_bytes() == b"archive"
 
 
 def test_unknown_server_version_requests_input(tmp_path: Path) -> None:

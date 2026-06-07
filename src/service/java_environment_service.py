@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ MC_JAVA_PATH_OVERRIDE_KEY = "mc_java_path_override"
 MC_JAVA_HOME_OVERRIDE_KEY = "mc_java_home_override"
 MC_SERVER_VERSION_OVERRIDE_KEY = "mc_server_version_override"
 ADOPTIUM_API_BASE_URL = "https://api.adoptium.net/v3"
+_ADOPTIUM_USER_AGENT = "MinecraftServerDashboard/1.0"
 _JAVA_VERSION_RE = re.compile(r'version\s+"([^"]+)"|openjdk\s+([0-9][^\s"]*)', re.IGNORECASE)
 _MC_VERSION_RE = re.compile(r"(?<!\d)(1\.\d+(?:\.\d+)?)(?!\d)")
 _CHECK_TIMEOUT_SECONDS = 5
@@ -550,8 +552,13 @@ class AdoptiumDownloader:
             f"?architecture={arch}&image_type={package_type}&os={os_name}&vendor=eclipse"
         )
         try:
-            with urllib.request.urlopen(url, timeout=20) as response:
+            request = self._request(url, accept="application/json")
+            with urllib.request.urlopen(request, timeout=20) as response:
                 payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            raise JavaInstallError(
+                f"无法查询 Temurin 下载资产：{_format_http_error(exc)}"
+            ) from exc
         except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
             raise JavaInstallError(f"无法查询 Temurin 下载资产：{exc}") from exc
 
@@ -568,7 +575,7 @@ class AdoptiumDownloader:
             if not checksum:
                 continue
             return AdoptiumAsset(
-                link=str(link),
+                link=self._binary_url(feature_version, os_name, arch, package_type),
                 filename=str(filename),
                 checksum=str(checksum).strip(),
                 package_type=package_type,
@@ -576,19 +583,66 @@ class AdoptiumDownloader:
         return None
 
     def download(self, url: str, target: Path) -> None:
-        try:
-            with urllib.request.urlopen(url, timeout=60) as response:
-                with target.open("wb") as handle:
-                    shutil.copyfileobj(response, handle)
-        except (OSError, urllib.error.URLError) as exc:
-            raise JavaInstallError(f"Java 下载失败：{exc}") from exc
+        for attempt in range(2):
+            try:
+                request = self._request(url, accept="application/octet-stream")
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    with target.open("wb") as handle:
+                        shutil.copyfileobj(response, handle)
+                return
+            except urllib.error.HTTPError as exc:
+                if exc.code == 403 and attempt == 0:
+                    continue
+                raise JavaInstallError(f"Java 下载失败：{_format_http_error(exc)}") from exc
+            except (OSError, urllib.error.URLError) as exc:
+                raise JavaInstallError(f"Java 下载失败：{exc}") from exc
 
     def _read_text(self, url: str) -> str:
         try:
-            with urllib.request.urlopen(url, timeout=20) as response:
+            request = self._request(url, accept="text/plain")
+            with urllib.request.urlopen(request, timeout=20) as response:
                 return response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raise JavaInstallError(f"无法读取 checksum：{_format_http_error(exc)}") from exc
         except (OSError, urllib.error.URLError) as exc:
             raise JavaInstallError(f"无法读取 checksum：{exc}") from exc
+
+    def _binary_url(
+        self,
+        feature_version: int,
+        os_name: str,
+        arch: str,
+        package_type: str,
+    ) -> str:
+        return (
+            f"{self._base_url}/binary/latest/{feature_version}/ga/{os_name}/{arch}/"
+            f"{package_type}/hotspot/normal/eclipse"
+        )
+
+    @staticmethod
+    def _request(url: str, *, accept: str) -> urllib.request.Request:
+        return urllib.request.Request(
+            url,
+            headers={
+                "Accept": accept,
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "User-Agent": _ADOPTIUM_USER_AGENT,
+            },
+        )
+
+
+def _format_http_error(exc: urllib.error.HTTPError) -> str:
+    host = urllib.parse.urlsplit(exc.url).hostname or "unknown host"
+    reason = str(exc.reason or "").strip()
+    retry_after = exc.headers.get("Retry-After") if exc.headers else None
+    detail = f"HTTP {exc.code}"
+    if reason:
+        detail += f" {reason}"
+    detail += f"（来源：{host}）"
+    if retry_after:
+        detail += f"，请在 {retry_after} 秒后重试"
+    return detail
 
 
 def settings_with_java_overrides(
