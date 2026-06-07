@@ -162,6 +162,7 @@ class OpsHomePage:
             interfaces.environment,
             interfaces.java_environment,
             interfaces.chat,
+            interfaces.player_ai_chat,
             on_saved=on_settings_saved,
         )
         self.command_console = CommandConsole(
@@ -975,6 +976,9 @@ class OpsHomePage:
             self.page.update()
 
     def start_background_refresh(self) -> None:
+        player_ai_chat = getattr(self.interfaces, "player_ai_chat", None)
+        if player_ai_chat is not None:
+            player_ai_chat.start()
         self._refresh_dashboard_snapshot()
         self._start_dashboard_polling()
 
@@ -1114,6 +1118,12 @@ class OpsHomePage:
         self._stop_dashboard_polling()
         self._status_polling = False
         self._startup_log_follow_generation += 1
+        player_ai_chat = getattr(self.interfaces, "player_ai_chat", None)
+        if player_ai_chat is not None:
+            try:
+                player_ai_chat.stop()
+            except Exception:
+                pass
         try:
             self.log_viewer.stop_auto_refresh()
         except Exception:

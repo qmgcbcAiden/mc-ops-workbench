@@ -282,6 +282,22 @@ class TestPlayerServiceStdoutScan:
         assert player["is_operator"] is True
         assert player["operator_level"] == 3
 
+    def test_is_operator_uses_case_insensitive_cached_ops_lookup(self, tmp_path):
+        server_dir = tmp_path / "server"
+        server_dir.mkdir()
+        (server_dir / "ops.json").write_text(
+            '[{"uuid": "12345678abcd1234abcd123456789012", '
+            '"name": "Admin", "level": 4, "bypassesPlayerLimit": false}]',
+            encoding="utf-8",
+        )
+        service = PlayerService(
+            player_repository=None,
+            settings=SimpleNamespace(mc_rcon_password="", mc_server_dir=server_dir),
+        )
+
+        assert service.is_operator("admin") is True
+        assert service.is_operator("Steve") is False
+
     def test_refresh_marks_non_operator_when_ops_json_does_not_match(self, tmp_path):
         server_dir = tmp_path / "server"
         server_dir.mkdir()

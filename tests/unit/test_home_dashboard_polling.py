@@ -224,6 +224,19 @@ class _ChatStub:
         }
 
 
+class _PlayerAiChatStub:
+    def __init__(self) -> None:
+        self.start_count = 0
+        self.stop_count = 0
+
+    def start(self) -> bool:
+        self.start_count += 1
+        return True
+
+    def stop(self) -> None:
+        self.stop_count += 1
+
+
 class _ChatPanelStub:
     def __init__(self) -> None:
         self.attachments: list[dict] = []
@@ -309,6 +322,7 @@ def _make_home(state: str = "running") -> OpsHomePage:
         player=_PlayerStub(),
         system=_SystemStub(),
         chat=_ChatStub(),
+        player_ai_chat=_PlayerAiChatStub(),
     )
     home.metrics_row = ft.ResponsiveRow(spacing=12, run_spacing=12)
     home.player_list = ft.ListView(expand=True, spacing=0, padding=0)
@@ -382,6 +396,7 @@ def test_background_refresh_starts_after_build_when_requested() -> None:
     assert home._dashboard_polling is True
     assert home.page.thread_handler == home._dashboard_poll_loop
     assert home.page.update_count == 2
+    assert home.interfaces.player_ai_chat.start_count == 1
     home._stop_dashboard_polling()
 
 
@@ -986,6 +1001,7 @@ def test_home_shutdown_stops_background_refreshers() -> None:
     assert home._dashboard_polling is False
     assert home._dashboard_stop_event.is_set() is True
     assert home.log_viewer.stop_count == 1
+    assert home.interfaces.player_ai_chat.stop_count == 1
 
 
 def test_dashboard_refresh_interval_is_short_for_stopped_metrics() -> None:

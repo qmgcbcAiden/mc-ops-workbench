@@ -128,6 +128,14 @@ class PlayerService:
     def get_player_directory(self) -> dict:
         return self.refresh_player_directory(force=False)
 
+    def is_operator(self, player_name: str) -> bool:
+        name = str(player_name or "").strip().lower()
+        if not name:
+            return False
+        with self._lock:
+            operator_lookup = self._load_operator_lookup()
+        return name in operator_lookup.get("names", set())
+
     def refresh_player_directory(self, force: bool = False) -> dict:
         if self.player_repository is not None and not force:
             cached = self._get_player_directory_cache()

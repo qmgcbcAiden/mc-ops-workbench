@@ -54,6 +54,16 @@ class LlmRequestConfig:
     base_url_env_name: str = "BASE_URL"
 
 
+@dataclass(frozen=True)
+class LlmRequestOptions:
+    max_tokens: int | None = None
+    temperature: float | None = None
+    timeout_seconds: int | None = None
+    max_retries: int | None = None
+    extra_body: dict | None = None
+    include_finish_notice: bool = True
+
+
 class LlmClient:
     def __init__(
         self,
@@ -86,6 +96,10 @@ class LlmClient:
         return self._request_config().model
 
     @property
+    def provider(self) -> str:
+        return self._request_config().provider
+
+    @property
     def max_tokens(self) -> int:
         return self._request_config().max_tokens
 
@@ -102,29 +116,56 @@ class LlmClient:
             return self._model_config_provider()
         return self._static_config
 
-    def _client(self, config: LlmRequestConfig) -> OpenAI:
+    def _client(
+        self,
+        config: LlmRequestConfig,
+        timeout_seconds: int | None = None,
+        max_retries: int | None = None,
+    ) -> OpenAI:
+        kwargs: dict = {
+            "api_key": config.api_key,
+            "base_url": config.base_url,
+            "timeout": timeout_seconds or config.timeout_seconds,
+        }
+        if max_retries is not None:
+            kwargs["max_retries"] = max_retries
         return OpenAI(
-            api_key=config.api_key,
-            base_url=config.base_url,
-            timeout=config.timeout_seconds,
+            **kwargs,
         )
 
     def chat(
-        self, messages: list[dict], tools: list[dict] | None = None
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        request_options: LlmRequestOptions | None = None,
     ) -> LlmResponse:
         config = self._request_config()
+        options = request_options or LlmRequestOptions()
+        max_tokens = options.max_tokens or config.max_tokens
+        temperature = (
+            config.temperature
+            if options.temperature is None
+            else options.temperature
+        )
+        timeout_seconds = options.timeout_seconds or config.timeout_seconds
         try:
             _ensure_configured(config)
             kwargs: dict = {
                 "model": config.model,
                 "messages": messages,
-                "max_tokens": config.max_tokens,
-                "temperature": config.temperature,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
             }
             if tools:
                 kwargs["tools"] = tools
+            if options.extra_body:
+                kwargs["extra_body"] = options.extra_body
 
-            response = self._client(config).chat.completions.create(**kwargs)
+            response = self._client(
+                config,
+                timeout_seconds,
+                options.max_retries,
+            ).chat.completions.create(**kwargs)
             choice = response.choices[0]
             content = choice.message.content or ""
             finish_reason = getattr(choice, "finish_reason", None)
@@ -147,7 +188,11 @@ class LlmClient:
                 }
 
             return LlmResponse(
-                content=_content_with_finish_notice(content, finish_reason, config.max_tokens),
+                content=(
+                    _content_with_finish_notice(content, finish_reason, max_tokens)
+                    if options.include_finish_notice
+                    else content
+                ),
                 model=response.model,
                 token_usage=token_usage,
                 tool_calls=tool_calls,
@@ -163,7 +208,7 @@ class LlmClient:
             ) from e
         except APITimeoutError as e:
             raise RuntimeError(
-                f"{_provider_label(config)} API 超时（{config.timeout_seconds}s），请检查网络或适当增加请求超时时间"
+                f"{_provider_label(config)} API 超时（{timeout_seconds}s），请检查网络或适当增加请求超时时间"
             ) from e
         except APIError as e:
             raise RuntimeError(
@@ -362,8 +407,12 @@ class FakeLlmClient(LlmClient):
         self._call_count = 0
 
     def chat(
-        self, messages: list[dict], tools: list[dict] | None = None
+        self,
+        messages: list[dict],
+        tools: list[dict] | None = None,
+        request_options: LlmRequestOptions | None = None,
     ) -> LlmResponse:
+        del messages, tools, request_options
         idx = min(self._call_count, len(self._responses) - 1)
         self._call_count += 1
         return LlmResponse(

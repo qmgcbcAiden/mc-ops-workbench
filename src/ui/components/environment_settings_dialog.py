@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ import flet as ft
 from src.interface.chat_interface import ChatInterface
 from src.interface.environment_settings_interface import EnvironmentSettingsInterface
 from src.interface.java_environment_interface import JavaEnvironmentInterface
+from src.interface.player_ai_chat_interface import PlayerAiChatInterface
 from src.ui import theme
 
 
@@ -28,6 +30,7 @@ _DIALOG_HORIZONTAL_MARGIN = 48
 _DIALOG_MAX_HEIGHT = 680
 _DIALOG_MIN_HEIGHT = 360
 _DIALOG_VERTICAL_MARGIN = 120
+_PLAYER_NAME_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 
 
 @dataclass
@@ -51,18 +54,22 @@ class EnvironmentSettingsDialog:
         environment_interface: EnvironmentSettingsInterface,
         java_interface: JavaEnvironmentInterface,
         chat_interface: ChatInterface | None = None,
+        player_ai_chat_interface: PlayerAiChatInterface | None = None,
         on_saved: Callable[[dict], None] | None = None,
     ) -> None:
         self._page = page
         self._interface = environment_interface
         self._java = java_interface
         self._chat = chat_interface
+        self._player_ai_chat = player_ai_chat_interface
         self._on_saved = on_saved
         self._dialog: ft.AlertDialog | None = None
         self._inspection: dict[str, Any] = {}
         self._locked_fields: set[str] = set()
         self._provider_rows: list[_ProviderRow] = []
         self._model_checkboxes: list[ft.Checkbox] = []
+        self._player_ai_entries: list[dict] = []
+        self._player_ai_known_players: list[dict] = []
 
     def show(self, *, first_run: bool = False) -> None:
         try:
@@ -78,6 +85,7 @@ class EnvironmentSettingsDialog:
         ]
         if not self._provider_rows:
             self._provider_rows = [self._make_provider_row(_empty_provider("deepseek"))]
+        self._load_player_ai_settings()
 
         self._provider_list = ft.Column(
             controls=[self._provider_card(row) for row in self._provider_rows],
@@ -173,6 +181,11 @@ class EnvironmentSettingsDialog:
                             vertical_alignment=ft.CrossAxisAlignment.CENTER,
                         ),
                         self._build_model_settings(),
+                        *(
+                            [self._build_player_ai_settings()]
+                            if self._player_ai_chat is not None
+                            else []
+                        ),
                         ft.Divider(height=1, color=theme.LINE),
                         _section_title(
                             "服务器",
@@ -438,6 +451,304 @@ class EnvironmentSettingsDialog:
         self._apply_provider_lock(row)
         self._update()
 
+    def _load_player_ai_settings(self) -> None:
+        self._player_ai_settings = {
+            "enabled": True,
+            "audience": "all",
+            "list_mode": "blocklist",
+            "access_entries": [],
+        }
+        self._player_ai_entries = []
+        self._player_ai_known_players = []
+        if self._player_ai_chat is None:
+            return
+        try:
+            self._player_ai_settings = self._player_ai_chat.get_settings()
+            self._player_ai_known_players = self._player_ai_chat.list_known_players()
+            known_by_name = {
+                str(player.get("name") or "").lower(): player
+                for player in self._player_ai_known_players
+            }
+            self._player_ai_entries = []
+            for entry in self._player_ai_settings.get("access_entries", []):
+                item = dict(entry)
+                known = known_by_name.get(
+                    str(item.get("display_name") or "").lower(),
+                    {},
+                )
+                item["is_operator"] = bool(known.get("is_operator"))
+                self._player_ai_entries.append(item)
+        except Exception:
+            self._player_ai_settings = {
+                "enabled": True,
+                "audience": "all",
+                "list_mode": "blocklist",
+                "access_entries": [],
+            }
+
+    def _build_player_ai_settings(self) -> ft.Control:
+        settings = self._player_ai_settings
+        self._player_ai_enabled = ft.Switch(
+            label="启用游戏内 AI",
+            value=bool(settings.get("enabled", True)),
+            active_color=theme.BLUE,
+            label_text_style=ft.TextStyle(color=theme.TEXT, size=12),
+        )
+        self._player_ai_audience = ft.SegmentedButton(
+            segments=[
+                ft.Segment(
+                    value="all",
+                    icon=ft.Icons.GROUPS,
+                    label=ft.Text("所有玩家", size=12),
+                ),
+                ft.Segment(
+                    value="operators",
+                    icon=ft.Icons.ADMIN_PANEL_SETTINGS,
+                    label=ft.Text("管理员", size=12),
+                ),
+            ],
+            selected=[str(settings.get("audience") or "all")],
+            show_selected_icon=False,
+            style=_segmented_button_style(),
+            on_change=self._update_player_ai_list_hint,
+        )
+        self._player_ai_list_mode = ft.SegmentedButton(
+            segments=[
+                ft.Segment(
+                    value="allowlist",
+                    icon=ft.Icons.VERIFIED_USER,
+                    label=ft.Text("白名单", size=12),
+                ),
+                ft.Segment(
+                    value="blocklist",
+                    icon=ft.Icons.BLOCK,
+                    label=ft.Text("黑名单", size=12),
+                ),
+            ],
+            selected=[str(settings.get("list_mode") or "blocklist")],
+            show_selected_icon=False,
+            style=_segmented_button_style(),
+            on_change=self._update_player_ai_list_hint,
+        )
+        self._player_ai_list_hint = ft.Text(
+            _player_ai_list_hint(
+                str(settings.get("audience") or "all"),
+                str(settings.get("list_mode") or "blocklist"),
+            ),
+            size=11,
+            color=theme.MUTED,
+        )
+        self._player_ai_player_input = _settings_field(
+            label="玩家名",
+            hint_text="Steve",
+            expand=True,
+        )
+        self._player_ai_player_input.on_change = self._refresh_player_ai_suggestions
+        self._player_ai_player_input.on_submit = self._add_player_ai_entry
+        self._player_ai_suggestions = ft.Column(spacing=2, visible=False)
+        self._player_ai_entry_list = ft.Column(spacing=0)
+        self._render_player_ai_entries()
+
+        return ft.ExpansionTile(
+            title=ft.Text("游戏内 @AI", size=13, color=theme.TEXT),
+            subtitle=ft.Text("权限、名单与独立短上下文", size=11, color=theme.MUTED),
+            leading=ft.Icon(ft.Icons.FORUM, color=theme.MUTED, size=18),
+            controls=[
+                ft.Container(
+                    content=ft.Column(
+                        controls=[
+                            self._player_ai_enabled,
+                            ft.Text("可用玩家", size=11, color=theme.MUTED),
+                            self._player_ai_audience,
+                            ft.Text("名单规则", size=11, color=theme.MUTED),
+                            self._player_ai_list_mode,
+                            self._player_ai_list_hint,
+                            ft.Row(
+                                controls=[
+                                    self._player_ai_player_input,
+                                    ft.IconButton(
+                                        icon=ft.Icons.PERSON_ADD,
+                                        icon_color=theme.BLUE,
+                                        tooltip="加入名单",
+                                        on_click=self._add_player_ai_entry,
+                                    ),
+                                ],
+                                spacing=4,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            self._player_ai_suggestions,
+                            self._player_ai_entry_list,
+                        ],
+                        spacing=7,
+                    ),
+                    padding=ft.Padding.only(left=10, right=10, bottom=10),
+                )
+            ],
+            collapsed_bgcolor=theme.PANEL_SOFT,
+            bgcolor=theme.PANEL_SOFT,
+            collapsed_text_color=theme.TEXT,
+            text_color=theme.TEXT,
+            collapsed_icon_color=theme.MUTED,
+            icon_color=theme.MUTED,
+            shape=ft.RoundedRectangleBorder(radius=7),
+            collapsed_shape=ft.RoundedRectangleBorder(radius=7),
+        )
+
+    def _update_player_ai_list_hint(self, _event=None) -> None:
+        self._player_ai_list_hint.value = _player_ai_list_hint(
+            _selected_segment(self._player_ai_audience, "all"),
+            _selected_segment(self._player_ai_list_mode, "blocklist"),
+        )
+        self._update()
+
+    def _refresh_player_ai_suggestions(self, _event=None) -> None:
+        query = str(self._player_ai_player_input.value or "").strip().lower()
+        existing = {
+            str(entry.get("display_name") or "").lower()
+            for entry in self._player_ai_entries
+        }
+        matches = [
+            player
+            for player in self._player_ai_known_players
+            if query
+            and query in str(player.get("name") or "").lower()
+            and str(player.get("name") or "").lower() not in existing
+        ][:6]
+        self._player_ai_suggestions.controls = [
+            ft.TextButton(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(
+                            ft.Icons.ADMIN_PANEL_SETTINGS
+                            if player.get("is_operator")
+                            else ft.Icons.PERSON,
+                            size=15,
+                            color=theme.AMBER
+                            if player.get("is_operator")
+                            else theme.MUTED,
+                        ),
+                        ft.Text(
+                            str(player.get("name") or ""),
+                            size=12,
+                            color=theme.TEXT,
+                        ),
+                    ],
+                    spacing=6,
+                ),
+                on_click=lambda _event, item=player: self._add_player_ai_entry(
+                    player=item
+                ),
+            )
+            for player in matches
+        ]
+        self._player_ai_suggestions.visible = bool(matches)
+        self._update()
+
+    def _add_player_ai_entry(self, _event=None, *, player: dict | None = None) -> None:
+        name = str(
+            (player or {}).get("name")
+            or self._player_ai_player_input.value
+            or ""
+        ).strip()
+        if not _PLAYER_NAME_RE.fullmatch(name):
+            self._set_feedback("玩家名需为 3-16 位字母、数字或下划线。", error=True)
+            return
+        known = player or next(
+            (
+                item
+                for item in self._player_ai_known_players
+                if str(item.get("name") or "").lower() == name.lower()
+            ),
+            {},
+        )
+        by_key = {
+            str(entry.get("display_name") or "").lower(): dict(entry)
+            for entry in self._player_ai_entries
+        }
+        by_key[name.lower()] = {
+            "player_key": name.lower(),
+            "display_name": name,
+            "player_uuid": known.get("uuid"),
+            "is_operator": bool(known.get("is_operator")),
+        }
+        self._player_ai_entries = sorted(
+            by_key.values(),
+            key=lambda entry: str(entry.get("display_name") or "").lower(),
+        )
+        self._player_ai_player_input.value = ""
+        self._player_ai_suggestions.visible = False
+        self._render_player_ai_entries()
+        self._update()
+
+    def _remove_player_ai_entry(self, player_key: str) -> None:
+        self._player_ai_entries = [
+            entry
+            for entry in self._player_ai_entries
+            if str(entry.get("player_key") or "").lower() != player_key.lower()
+        ]
+        self._render_player_ai_entries()
+        self._update()
+
+    def _render_player_ai_entries(self) -> None:
+        if not self._player_ai_entries:
+            self._player_ai_entry_list.controls = [
+                ft.Text("名单为空", size=11, color=theme.MUTED)
+            ]
+            return
+        self._player_ai_entry_list.controls = [
+            ft.Container(
+                content=ft.Row(
+                    controls=[
+                        ft.Icon(
+                            ft.Icons.ADMIN_PANEL_SETTINGS
+                            if entry.get("is_operator")
+                            else ft.Icons.PERSON,
+                            size=16,
+                            color=theme.AMBER
+                            if entry.get("is_operator")
+                            else theme.MUTED,
+                        ),
+                        ft.Text(
+                            str(entry.get("display_name") or ""),
+                            size=12,
+                            color=theme.TEXT,
+                            expand=True,
+                        ),
+                        ft.IconButton(
+                            icon=ft.Icons.DELETE_OUTLINE,
+                            icon_color=theme.MUTED,
+                            tooltip="移出名单",
+                            on_click=lambda _event, key=str(
+                                entry.get("player_key") or ""
+                            ): self._remove_player_ai_entry(key),
+                        ),
+                    ],
+                    spacing=6,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                border=ft.Border.only(bottom=ft.BorderSide(1, theme.LINE)),
+                height=40,
+            )
+            for entry in self._player_ai_entries
+        ]
+
+    def _player_ai_payload(self) -> dict:
+        return {
+            "enabled": bool(self._player_ai_enabled.value),
+            "audience": _selected_segment(self._player_ai_audience, "all"),
+            "list_mode": _selected_segment(
+                self._player_ai_list_mode,
+                "blocklist",
+            ),
+            "access_entries": [
+                {
+                    "display_name": entry.get("display_name"),
+                    "player_uuid": entry.get("player_uuid"),
+                }
+                for entry in self._player_ai_entries
+            ],
+        }
+
     def _add_provider_row(self, _event=None) -> None:
         slot = self._next_custom_slot()
         row = self._make_provider_row(_empty_provider(f"custom_{slot}"))
@@ -507,6 +818,8 @@ class EnvironmentSettingsDialog:
     def _save(self, _event=None) -> None:
         self._set_busy(saving=True)
         try:
+            if self._player_ai_chat is not None:
+                self._player_ai_chat.save_settings(self._player_ai_payload())
             result = self._interface.save_basic_settings(
                 {
                     "provider": self._inspection.get("provider"),
@@ -681,6 +994,36 @@ def _outlined_button_style() -> ft.ButtonStyle:
         side=ft.BorderSide(1, theme.LINE_STRONG),
         shape=ft.RoundedRectangleBorder(radius=7),
     )
+
+
+def _segmented_button_style() -> ft.ButtonStyle:
+    return ft.ButtonStyle(
+        color={
+            ft.ControlState.SELECTED: "#ffffff",
+            ft.ControlState.DEFAULT: theme.TEXT,
+        },
+        bgcolor={
+            ft.ControlState.SELECTED: theme.BLUE,
+            ft.ControlState.DEFAULT: theme.INPUT_BG,
+        },
+        side=ft.BorderSide(1, theme.LINE_STRONG),
+        shape=ft.RoundedRectangleBorder(radius=7),
+    )
+
+
+def _selected_segment(control: ft.SegmentedButton, default: str) -> str:
+    selected = list(control.selected or [])
+    return str(selected[0]) if selected else default
+
+
+def _player_ai_list_hint(audience: str, list_mode: str) -> str:
+    if audience == "operators" and list_mode == "allowlist":
+        return "管理员自动允许；名单用于额外允许普通玩家。"
+    if audience == "operators":
+        return "仅管理员默认允许；名单用于排除指定管理员。"
+    if list_mode == "allowlist":
+        return "所有玩家自动允许；无需把玩家逐个加入名单。"
+    return "所有玩家默认允许；名单用于排除指定玩家。"
 
 
 def _dialog_content_width(page: ft.Page) -> int:

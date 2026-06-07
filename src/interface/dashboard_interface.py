@@ -19,6 +19,7 @@ from src.interface.file_interface import FileInterface
 from src.interface.java_environment_interface import JavaEnvironmentInterface
 from src.interface.log_interface import LogInterface
 from src.interface.player_interface import PlayerInterface
+from src.interface.player_ai_chat_interface import PlayerAiChatInterface
 from src.interface.server_capability_interface import ServerCapabilityInterface
 from src.interface.server_interface import ServerInterface
 from src.interface.system_interface import SystemInterface
@@ -37,6 +38,7 @@ from src.repositories.java_environment_repository import JavaEnvironmentReposito
 from src.repositories.llm_repository import LlmRepository
 from src.repositories.metric_repository import MetricRepository
 from src.repositories.player_repository import PlayerRepository
+from src.repositories.player_ai_repository import PlayerAiRepository
 from src.repositories.runtime_repository import ServerRuntimeRepository
 from src.service.chat_service import ChatService
 from src.service.command_service import CommandService
@@ -50,6 +52,8 @@ from src.service.file_service import FileService
 from src.service.java_environment_service import JavaEnvironmentService
 from src.service.log_service import LogService
 from src.service.player_service import PlayerService
+from src.service.player_ai_chat_service import PlayerAiChatService
+from src.service.player_ai_policy_service import PlayerAiPolicyService
 from src.service.server_capability_service import ServerCapabilityService
 from src.service.server_service import ServerService
 from src.service.system_service import SystemService
@@ -73,6 +77,7 @@ class DashboardInterfaces:
     java_environment: JavaEnvironmentInterface
     environment: EnvironmentSettingsInterface
     addon: AddonDiagnosticInterface
+    player_ai_chat: PlayerAiChatInterface | None = None
 
 
 def create_dashboard_interfaces(
@@ -187,6 +192,22 @@ def create_dashboard_interfaces(
         ai_model_service=ai_model_service,
         addon_service=addon_service,
     )
+    player_ai_repository = PlayerAiRepository(connection)
+    player_ai_policy_service = PlayerAiPolicyService(
+        player_ai_repository,
+        is_operator=player_service.is_operator,
+        list_known_players=player_service.get_player_directory,
+    )
+    player_ai_chat_service = PlayerAiChatService(
+        log_path=settings.mc_log_path,
+        chat_repository=chat_repo,
+        llm_repository=llm_repo,
+        player_ai_repository=player_ai_repository,
+        policy_service=player_ai_policy_service,
+        command_service=command_service,
+        llm_client=llm_client,
+        is_ai_configured=ai_model_service.is_selected_model_configured,
+    )
 
     return DashboardInterfaces(
         player=PlayerInterface(player_service),
@@ -202,6 +223,10 @@ def create_dashboard_interfaces(
         java_environment=JavaEnvironmentInterface(java_environment_service),
         environment=EnvironmentSettingsInterface(environment_settings_service),
         addon=AddonDiagnosticInterface(addon_service),
+        player_ai_chat=PlayerAiChatInterface(
+            player_ai_chat_service,
+            player_ai_policy_service,
+        ),
     )
 
 

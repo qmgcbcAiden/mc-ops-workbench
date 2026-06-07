@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from src.ai.llm_client import FakeLlmClient, LlmRequestConfig, LlmResponse, LlmClient
+from src.ai.llm_client import (
+    FakeLlmClient,
+    LlmClient,
+    LlmRequestConfig,
+    LlmRequestOptions,
+    LlmResponse,
+)
 from src.ai.stream_events import StreamEventType
 
 
@@ -84,11 +90,12 @@ def test_llm_client_uses_current_model_request_config(monkeypatch):
             )
 
     class FakeOpenAI:
-        def __init__(self, api_key, base_url, timeout):
+        def __init__(self, api_key, base_url, timeout, max_retries=2):
             calls.append({
                 "api_key": api_key,
                 "base_url": base_url,
                 "timeout": timeout,
+                "max_retries": max_retries,
             })
             self.chat = SimpleNamespace(
                 completions=FakeCompletions(),
@@ -107,6 +114,16 @@ def test_llm_client_uses_current_model_request_config(monkeypatch):
     first = client.chat([{"role": "user", "content": "hi"}], tools=tools)
     selected["model"] = "qwen3.7-max"
     second = client.chat([{"role": "user", "content": "hi"}])
+    third = client.chat(
+        [{"role": "user", "content": "fast"}],
+        request_options=LlmRequestOptions(
+            max_tokens=256,
+            temperature=0.2,
+            timeout_seconds=15,
+            max_retries=0,
+            extra_body={"enable_thinking": False},
+        ),
+    )
 
     assert first.model == "deepseek-v4-flash"
     assert calls[0]["api_key"] == "deepseek-key"
@@ -123,3 +140,9 @@ def test_llm_client_uses_current_model_request_config(monkeypatch):
     assert calls[1]["kwargs"]["model"] == "qwen3.7-max"
     assert calls[1]["kwargs"]["max_tokens"] == 678
     assert calls[1]["kwargs"]["temperature"] == 0.1
+    assert third.model == "qwen3.7-max"
+    assert calls[2]["timeout"] == 15
+    assert calls[2]["max_retries"] == 0
+    assert calls[2]["kwargs"]["max_tokens"] == 256
+    assert calls[2]["kwargs"]["temperature"] == 0.2
+    assert calls[2]["kwargs"]["extra_body"] == {"enable_thinking": False}

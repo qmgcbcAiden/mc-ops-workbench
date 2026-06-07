@@ -25,6 +25,9 @@ EXPECTED_TABLES = {
     "player_directory_players",
     "player_directory_banned_ips",
     "player_directory_sync_state",
+    "player_ai_settings",
+    "player_ai_access_entries",
+    "player_ai_conversations",
     "metrics_samples",
     "command_audits",
     "llm_calls",
@@ -48,8 +51,8 @@ EXPECTED_TABLES = {
 def test_run_migrations_creates_schema_and_is_idempotent(tmp_path: Path) -> None:
     db_path = tmp_path / "app.db"
 
-    assert run_migrations(db_path) == 12
-    assert run_migrations(db_path) == 12
+    assert run_migrations(db_path) == 13
+    assert run_migrations(db_path) == 13
 
     connection = get_connection(db_path)
     try:
@@ -99,7 +102,7 @@ def test_run_migrations_creates_schema_and_is_idempotent(tmp_path: Path) -> None
             for row in connection.execute("PRAGMA table_info(addon_diagnostics)").fetchall()
         }
 
-        assert get_user_version(connection) == 12
+        assert get_user_version(connection) == 13
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert {
@@ -192,7 +195,7 @@ def test_v8_rebuild_clears_chat_history_but_preserves_runtime_data(tmp_path: Pat
     finally:
         connection.close()
 
-    assert run_migrations(db_path) == 12
+    assert run_migrations(db_path) == 13
     connection = get_connection(db_path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM chat_sessions").fetchone()[0] == 0

@@ -10,6 +10,7 @@ from src.ui.components.log_viewer import (
     MAX_LOG_ENTRIES,
     MAX_RENDERED_LOG_ROWS,
     DRAG_RELEASE_STALE_SECONDS,
+    LOG_CHECKBOX_SLOT_WIDTH,
     LOG_ROW_HEIGHT,
     LogViewer,
     _is_rcon_client_noise_event,
@@ -289,7 +290,7 @@ def test_log_rows_use_lightweight_control_trees() -> None:
 
     viewer._append_events([parse_log_line("[12:00:00 INFO]: Booting server")])
 
-    assert _count_control_tree(viewer.control.controls[0]) <= 6
+    assert _count_control_tree(viewer.control.controls[0]) <= 11
 
 
 def test_log_row_scroll_area_does_not_start_selection() -> None:
@@ -297,18 +298,24 @@ def test_log_row_scroll_area_does_not_start_selection() -> None:
     viewer._append_events([parse_log_line("[12:00:00 INFO]: Booting server")])
 
     row = viewer.control.controls[0]
-    selector, log_text = row.content.controls
+    row_body = row.content.controls[0]
+    selector, log_text = row_body.controls
 
     assert row.__class__.__name__ == "Container"
     assert selector.__class__.__name__ == "GestureDetector"
     assert log_text.__class__.__name__ == "Text"
-    assert row.on_hover is None
+    assert row.on_hover is not None
     assert selector.on_tap is not None
     assert selector.on_tap_down is None
+    assert selector.on_tap_up is None
     assert selector.on_pan_down is None
-    assert selector.on_pan_start is not None
+    assert selector.on_pan_start is None
+    assert selector.on_pan_update is None
+    assert selector.on_pan_end is None
+    assert selector.on_pan_cancel is None
 
     selector.on_enter(None)
+    row.on_hover(SimpleNamespace(data="false"))
 
     assert viewer.selection_count == 0
 
@@ -318,56 +325,62 @@ def test_log_row_scroll_area_does_not_start_selection() -> None:
     assert viewer.control.auto_scroll is True
 
 
-def test_log_row_drag_selection_starts_after_pan_start() -> None:
+def test_log_range_button_floats_outside_checkbox_gesture_area() -> None:
+    events = [
+        parse_log_line("[12:00:00 INFO]: Line 0"),
+        parse_log_line("[12:00:01 INFO]: Line 1"),
+    ]
     viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
-    viewer._append_events([parse_log_line("[12:00:00 INFO]: Booting server")])
-    selector = viewer.control.controls[0].content.controls[0]
+    viewer._render_events(events)
+    viewer._toggle_selection(events[0])
 
-    selector.on_pan_start(None)
+    row = viewer.control.controls[1]
+    row_body, range_overlay = row.content.controls
+    selector = row_body.controls[0]
 
-    assert viewer.is_drag_selecting is True
-    assert viewer.selection_count == 1
-    assert viewer.control.auto_scroll is False
+    selector.on_enter(None)
 
-    selector.on_pan_end(None)
-
-    assert viewer.is_drag_selecting is False
-    assert viewer.control.auto_scroll is True
+    assert selector.content.width == LOG_CHECKBOX_SLOT_WIDTH
+    assert range_overlay not in getattr(selector.content, "controls", [])
+    assert _row_range_overlay(row).visible is True
 
 
-def test_log_row_drag_selection_still_starts_on_pan_update() -> None:
+def test_log_row_pointer_movement_cannot_start_selection() -> None:
+    events = [
+        parse_log_line("[12:00:00 INFO]: Line 0"),
+        parse_log_line("[12:00:01 INFO]: Line 1"),
+        parse_log_line("[12:00:02 INFO]: Line 2"),
+    ]
     viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
-    viewer._append_events([parse_log_line("[12:00:00 INFO]: Booting server")])
-    selector = viewer.control.controls[0].content.controls[0]
+    viewer._render_events(events)
 
-    selector.on_pan_update(None)
-
-    assert viewer.is_drag_selecting is True
-    assert viewer.selection_count == 1
-    assert viewer.control.auto_scroll is False
-
-    selector.on_pan_end(None)
+    for row in viewer.control.controls:
+        selector = _row_selector(row)
+        selector.on_enter(None)
+        assert selector.on_pan_start is None
+        assert selector.on_pan_update is None
 
     assert viewer.is_drag_selecting is False
+    assert viewer.selection_count == 0
     assert viewer.control.auto_scroll is True
 
 
-def test_log_row_release_fallback_handlers_end_drag_selection() -> None:
+def test_log_row_hover_only_reveals_range_action_without_selecting_rows() -> None:
+    events = [
+        parse_log_line("[12:00:00 INFO]: Line 0"),
+        parse_log_line("[12:00:01 INFO]: Line 1"),
+        parse_log_line("[12:00:02 INFO]: Line 2"),
+    ]
     viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
-    viewer._append_events([parse_log_line("[12:00:00 INFO]: Booting server")])
-    selector = viewer.control.controls[0].content.controls[0]
+    viewer._render_events(events)
+    viewer._toggle_selection(events[0])
 
-    selector.on_pan_start(None)
-    selector.on_long_press_end(None)
+    _row_selector(viewer.control.controls[1]).on_enter(None)
+    _row_selector(viewer.control.controls[2]).on_enter(None)
 
-    assert viewer.is_drag_selecting is False
-    assert viewer.control.auto_scroll is True
-
-    selector.on_pan_start(None)
-    selector.on_tap_up(None)
-
-    assert viewer.is_drag_selecting is False
-    assert viewer.control.auto_scroll is True
+    assert [event["message"] for event in viewer.get_selected_events()] == ["Line 0"]
+    assert _row_range_overlay(viewer.control.controls[1]).visible is False
+    assert _row_range_overlay(viewer.control.controls[2]).visible is True
 
 
 def test_select_visible_selects_only_the_rendered_log_window() -> None:
@@ -400,6 +413,158 @@ def test_selected_events_preserve_log_order() -> None:
         "First line",
         "Third line",
     ]
+
+
+def test_log_range_button_stays_hidden_without_visible_anchor() -> None:
+    events = [
+        parse_log_line(f"[12:00:0{index} INFO]: Line {index}")
+        for index in range(3)
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+
+    selector = _row_selector(viewer.control.controls[1])
+    selector.on_enter(None)
+
+    assert _row_range_overlay(viewer.control.controls[1]).visible is False
+
+
+def test_log_range_button_selects_downward_from_earliest_selected_anchor() -> None:
+    events = [
+        parse_log_line(f"[12:00:0{index} INFO]: Line {index}")
+        for index in range(5)
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+    viewer._toggle_selection(events[0])
+
+    selector = _row_selector(viewer.control.controls[3])
+    selector.on_enter(None)
+    range_overlay = _row_range_overlay(viewer.control.controls[3])
+    range_button = _row_range_button(viewer.control.controls[3])
+
+    assert range_overlay.visible is True
+
+    range_button.on_click(None)
+
+    assert [event["message"] for event in viewer.get_selected_events()] == [
+        "Line 0",
+        "Line 1",
+        "Line 2",
+        "Line 3",
+    ]
+    assert range_overlay.visible is False
+
+
+def test_log_range_button_selects_upward_from_later_anchor() -> None:
+    events = [
+        parse_log_line(f"[12:00:0{index} INFO]: Line {index}")
+        for index in range(5)
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+    viewer._toggle_selection(events[4])
+
+    selector = _row_selector(viewer.control.controls[1])
+    selector.on_enter(None)
+    _row_range_button(viewer.control.controls[1]).on_click(None)
+
+    assert [event["message"] for event in viewer.get_selected_events()] == [
+        "Line 1",
+        "Line 2",
+        "Line 3",
+        "Line 4",
+    ]
+
+
+def test_log_range_button_fills_between_already_selected_endpoints() -> None:
+    events = [
+        parse_log_line(f"[12:00:0{index} INFO]: Line {index}")
+        for index in range(5)
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+    viewer._toggle_selection(events[0])
+    viewer._toggle_selection(events[4])
+
+    selector = _row_selector(viewer.control.controls[4])
+    selector.on_enter(None)
+    range_overlay = _row_range_overlay(viewer.control.controls[4])
+    range_button = _row_range_button(viewer.control.controls[4])
+
+    assert range_overlay.visible is True
+
+    range_button.on_click(None)
+
+    assert [event["message"] for event in viewer.get_selected_events()] == [
+        "Line 0",
+        "Line 1",
+        "Line 2",
+        "Line 3",
+        "Line 4",
+    ]
+
+
+def test_log_range_button_uses_earliest_selected_visible_row_as_anchor() -> None:
+    events = [
+        parse_log_line(f"[12:00:0{index} INFO]: Line {index}")
+        for index in range(6)
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+    viewer._toggle_selection(events[3])
+    viewer._toggle_selection(events[1])
+
+    selector = _row_selector(viewer.control.controls[5])
+    selector.on_enter(None)
+    _row_range_button(viewer.control.controls[5]).on_click(None)
+
+    assert [event["message"] for event in viewer.get_selected_events()] == [
+        "Line 1",
+        "Line 2",
+        "Line 3",
+        "Line 4",
+        "Line 5",
+    ]
+
+
+def test_log_range_button_ignores_selected_rows_outside_current_filter() -> None:
+    events = [
+        parse_log_line("[12:00:00 INFO]: Info line"),
+        parse_log_line("[12:00:01 ERROR]: First error"),
+        parse_log_line("[12:00:02 ERROR]: Second error"),
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+    viewer._toggle_selection(events[0])
+    viewer.selected_level = "ERROR"
+    viewer.refresh()
+
+    selector = _row_selector(viewer.control.controls[1])
+    selector.on_enter(None)
+
+    assert _row_range_overlay(viewer.control.controls[1]).visible is False
+
+
+def test_log_range_button_does_not_leak_when_live_rows_are_reused() -> None:
+    events = [
+        parse_log_line(f"[12:00:0{index} INFO]: Line {index}")
+        for index in range(3)
+    ]
+    viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
+    viewer._render_events(events)
+    viewer._toggle_selection(events[0])
+
+    reused_row = viewer.control.controls[2]
+    selector = _row_selector(reused_row)
+    selector.on_enter(None)
+
+    assert _row_range_overlay(reused_row).visible is True
+
+    viewer._append_events([parse_log_line("[12:00:03 INFO]: Line 3")])
+
+    assert viewer.control.controls[2] is reused_row
+    assert _row_range_overlay(reused_row).visible is False
 
 
 def test_log_viewer_reuses_rows_which_remain_in_the_live_window() -> None:
@@ -438,9 +603,22 @@ def _count_control_tree(control: object) -> int:
     return total
 
 
+def _row_selector(row: object) -> object:
+    return row.content.controls[0].controls[0]
+
+
 def _row_checkbox_icon(row: object) -> ft.Icons:
-    selector = row.content.controls[0]
-    return selector.content.content.icon
+    selector = _row_selector(row)
+    checkbox_shell = selector.content
+    return checkbox_shell.content.icon
+
+
+def _row_range_overlay(row: object) -> object:
+    return row.content.controls[1]
+
+
+def _row_range_button(row: object) -> object:
+    return _row_range_overlay(row).content
 
 
 def test_log_viewer_filters_rcon_client_noise_from_ui() -> None:
@@ -534,8 +712,8 @@ def test_log_viewer_drag_update_position_selects_target_row() -> None:
     viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
     viewer._render_events(events)
 
-    viewer.control.controls[0].content.controls[0].on_pan_start(None)
-    viewer.control.controls[0].content.controls[0].on_pan_update(SimpleNamespace(local_y=39))
+    viewer._start_drag_select(events[0])
+    viewer._drag_update_position(events[0], SimpleNamespace(local_y=39))
 
     assert viewer.selection_count == 2
     assert _row_checkbox_icon(viewer.control.controls[1]) == ft.Icons.CHECK_BOX
@@ -653,11 +831,10 @@ def test_log_viewer_drag_does_not_toggle_anchor_back_off_on_tap_cleanup() -> Non
     event = parse_log_line("[12:00:00 INFO]: Booting server")
     viewer = LogViewer(_LogInterfaceStub([]), _PageStub())
     viewer._render_events([event])
-    selector = viewer.control.controls[0].content.controls[0]
 
-    selector.on_pan_start(None)
-    selector.on_pan_end(None)
-    selector.on_tap(None)
+    viewer._start_drag_select(event)
+    viewer._end_drag_select()
+    viewer._toggle_selection(event)
 
     assert viewer.selection_count == 1
     assert _row_checkbox_icon(viewer.control.controls[0]) == ft.Icons.CHECK_BOX

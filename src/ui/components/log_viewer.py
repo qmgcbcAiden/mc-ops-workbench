@@ -19,6 +19,9 @@ MAX_LOG_ENTRIES = 500
 MAX_RENDERED_LOG_ROWS = 180
 MAX_EVENTS_PER_REFRESH = MAX_LOG_ENTRIES
 LOG_ROW_HEIGHT = 38
+LOG_CHECKBOX_SLOT_WIDTH = 34
+LOG_RANGE_BUTTON_WIDTH = 74
+LOG_RANGE_BUTTON_LEFT = 30
 LOG_ROW_SELECTED_BG = "#101d2c"
 LOG_POLL_INTERVAL_SECONDS = 0.08
 DRAG_TAP_SUPPRESS_SECONDS = 0.25
@@ -314,6 +317,65 @@ class LogViewer:
         self._selected_events.pop(key, None)
         return True
 
+    def _should_show_range_button(self, event: dict) -> bool:
+        if self._drag_selecting:
+            return False
+        target_key = _event_key(event)
+        with self._lock:
+            visible_events = self._visible_events_locked()
+            anchor_index = self._earliest_selected_visible_index_locked(visible_events)
+            target_index = _event_index(visible_events, target_key)
+            if anchor_index is None or target_index is None:
+                return False
+            return anchor_index != target_index
+
+    def _sync_range_button_hover(self, event: dict) -> None:
+        target_key = _event_key(event)
+        should_show_target = self._should_show_range_button(event)
+        controls: list[ft.Control] = []
+        for key in list(self._rendered_event_keys):
+            control = self._rendered_row_control(key)
+            if control is None:
+                continue
+            visible = should_show_target and key == target_key
+            if _set_log_row_range_button_visible(control, visible):
+                controls.append(control)
+        if controls:
+            self._flush_controls(*controls)
+
+    def _select_range_to_event(self, event: dict) -> None:
+        target_key = _event_key(event)
+        changed_keys: list[str] = []
+        with self._lock:
+            visible_events = self._visible_events_locked()
+            anchor_index = self._earliest_selected_visible_index_locked(visible_events)
+            target_index = _event_index(visible_events, target_key)
+            if anchor_index is None or target_index is None or anchor_index == target_index:
+                return
+
+            start = min(anchor_index, target_index)
+            end = max(anchor_index, target_index)
+            for target in visible_events[start:end + 1]:
+                if self._set_event_selected_locked(target, True):
+                    changed_keys.append(_event_key(target))
+
+        self._suppress_tap_key = target_key
+        self._suppress_tap_deadline = time.monotonic() + DRAG_TAP_SUPPRESS_SECONDS
+        self._hide_rendered_range_buttons()
+        if not changed_keys:
+            return
+        self._update_selection_ui()
+        if self._sync_rendered_rows_selection(changed_keys, True):
+            return
+        self.refresh()
+        self._update_live_log_control()
+
+    def _earliest_selected_visible_index_locked(self, visible_events: list[dict]) -> int | None:
+        for index, event in enumerate(visible_events):
+            if _event_key(event) in self._selected_keys:
+                return index
+        return None
+
     def _trigger_ask_ai(self) -> None:
         if self._on_ask_ai and callable(self._on_ask_ai):
             self._on_ask_ai()
@@ -322,6 +384,7 @@ class LogViewer:
         key = _event_key(event)
         if self._should_suppress_tap(key):
             return
+        self._hide_rendered_range_buttons()
         with self._lock:
             checked = key not in self._selected_keys
             changed = self._set_event_selected_locked(event, checked)
@@ -336,6 +399,7 @@ class LogViewer:
         key = _event_key(event)
         if self._drag_selecting and self._drag_anchor_key == key:
             return
+        self._hide_rendered_range_buttons()
         self._drag_selecting = True
         self._drag_anchor_key = key
         self._drag_anchor_index = self._rendered_event_index(key)
@@ -528,6 +592,19 @@ class LogViewer:
                 continue
             _set_log_row_selection_visual(control, checked)
             controls.append(control)
+        if not controls:
+            return False
+        self._flush_controls(*controls)
+        return True
+
+    def _hide_rendered_range_buttons(self) -> bool:
+        controls: list[ft.Control] = []
+        for key in self._rendered_event_keys:
+            control = self._rendered_row_control(key)
+            if control is None:
+                continue
+            if _set_log_row_range_button_visible(control, False):
+                controls.append(control)
         if not controls:
             return False
         self._flush_controls(*controls)
@@ -813,6 +890,8 @@ class LogViewer:
             existing_controls.get(key) or self._build_log_row(event)
             for key, event in zip(target_keys, visible_events)
         ]
+        for control in self._log_list.controls:
+            _set_log_row_range_button_visible(control, False)
         self._rendered_event_keys = target_keys
         self._showing_empty_state = False
         return True
@@ -823,11 +902,8 @@ class LogViewer:
             event,
             checked=key in self._selected_keys,
             on_check=self._toggle_selection,
-            on_drag_start=self._start_drag_select,
-            on_drag_update=self._drag_update_position,
-            on_drag_over=self._drag_over_event,
-            on_drag_end=self._end_drag_select,
-            on_drag_scroll=self._auto_scroll_from_drag,
+            on_range_hover=self._sync_range_button_hover,
+            on_range_select=self._select_range_to_event,
         )
 
     def _dedupe_events_locked(self, events: list[dict]) -> list[dict]:
@@ -871,6 +947,13 @@ def _event_key(event: dict) -> str:
     if event.get("raw_line"):
         return str(event["raw_line"])
     return "|".join(str(event.get(key, "")) for key in ("event_time", "level", "message", "created_at"))
+
+
+def _event_index(events: list[dict], key: str) -> int | None:
+    for index, event in enumerate(events):
+        if _event_key(event) == key:
+            return index
+    return None
 
 
 def _filter_ui_noise_events(events: list[dict]) -> list[dict]:
@@ -926,44 +1009,70 @@ def _log_row(
     item: dict,
     checked: bool = False,
     on_check: object = None,
-    on_drag_start: object = None,
-    on_drag_update: object = None,
-    on_drag_over: object = None,
-    on_drag_end: object = None,
-    on_drag_scroll: object = None,
+    on_range_hover: object = None,
+    on_range_select: object = None,
 ) -> ft.Control:
     from src.ui.theme import log_color as _log_color
 
     level = item.get("level") or "INFO"
     color, _ = _log_color(level)
 
-    def _start(_event: object = None) -> None:
-        if on_drag_start and callable(on_drag_start):
-            on_drag_start(item)
-
     def _over(_event: object = None) -> None:
-        if on_drag_over and callable(on_drag_over):
-            on_drag_over(item)
+        if on_range_hover and callable(on_range_hover):
+            on_range_hover(item)
 
-    def _end(_event: object = None) -> None:
-        if on_drag_end and callable(on_drag_end):
-            on_drag_end()
-
-    def _update(event: object = None) -> None:
-        _start(event)
-        if on_drag_update and callable(on_drag_update):
-            on_drag_update(item, event)
-        else:
-            _over(event)
-        if on_drag_scroll and callable(on_drag_scroll):
-            on_drag_scroll(event)
+    def _exit(_event: object = None) -> None:
+        _set_range_visible(False)
 
     def _tap(_event: object = None) -> None:
         if on_check and callable(on_check):
             on_check(item)
 
+    def _range_tap(_event: object = None) -> None:
+        _set_range_visible(False)
+        if on_range_select and callable(on_range_select):
+            on_range_select(item)
+
+    row_control: ft.Container | None = None
+
+    def _set_range_visible(visible: bool) -> None:
+        if row_control is None:
+            return
+        if not _set_log_row_range_button_visible(row_control, visible):
+            return
+        _update_control_silently(row_control)
+
     line = _format_log_line(item)
     text_color = color if level in {"WARN", "ERROR"} else theme.TEXT
+
+    range_button = ft.TextButton(
+        content=ft.Text(
+            "选到这里",
+            size=11,
+            color=theme.BLUE,
+            no_wrap=True,
+            overflow=ft.TextOverflow.VISIBLE,
+        ),
+        style=ft.ButtonStyle(
+            bgcolor=theme.BLUE_SOFT,
+            color=theme.BLUE,
+            shape=ft.RoundedRectangleBorder(radius=5),
+            padding=ft.Padding.symmetric(horizontal=6, vertical=3),
+        ),
+        width=LOG_RANGE_BUTTON_WIDTH,
+        height=26,
+        tooltip="选中锚点到这里",
+        on_click=_range_tap,
+    )
+    range_overlay = ft.Container(
+        content=range_button,
+        width=LOG_RANGE_BUTTON_WIDTH,
+        height=26,
+        visible=False,
+        left=LOG_RANGE_BUTTON_LEFT,
+        top=(LOG_ROW_HEIGHT - 26) / 2,
+        data={"role": "range_overlay"},
+    )
 
     selector = ft.GestureDetector(
         content=ft.Container(
@@ -972,54 +1081,54 @@ def _log_row(
                 size=18,
                 color=theme.BLUE if checked else theme.MUTED,
             ),
-            width=34,
+            width=LOG_CHECKBOX_SLOT_WIDTH,
             height=LOG_ROW_HEIGHT,
             bgcolor=theme.BLUE_SOFT if checked else "#00000000",
             alignment=ft.Alignment(0, 0),
+            data={"role": "checkbox_shell"},
         ),
-        drag_interval=0,
         hover_interval=0,
         mouse_cursor=ft.MouseCursor.CLICK,
         on_tap=_tap,
-        on_tap_up=_end,
-        on_pan_start=_start,
-        on_pan_update=_update,
-        on_pan_end=_end,
-        on_pan_cancel=_end,
-        on_long_press_cancel=_end,
-        on_long_press_up=_end,
-        on_long_press_end=_end,
         on_enter=_over,
         tooltip="选择日志",
     )
 
-    return ft.Container(
-        content=ft.Row(
-            controls=[
-                selector,
-                ft.Text(
-                    line,
-                    size=11,
-                    color=text_color,
-                    font_family="Consolas",
-                    expand=True,
-                    max_lines=1,
-                    no_wrap=True,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                    selectable=False,
-                    enable_interactive_selection=False,
-                ),
-            ],
-            spacing=4,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    row_body = ft.Row(
+        controls=[
+            selector,
+            ft.Text(
+                line,
+                size=11,
+                color=text_color,
+                font_family="Consolas",
+                expand=True,
+                max_lines=1,
+                no_wrap=True,
+                overflow=ft.TextOverflow.ELLIPSIS,
+                selectable=False,
+                enable_interactive_selection=False,
+            ),
+        ],
+        spacing=4,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    row_control = ft.Container(
+        content=ft.Stack(
+            controls=[row_body, range_overlay],
+            expand=True,
+            clip_behavior=ft.ClipBehavior.NONE,
         ),
         height=LOG_ROW_HEIGHT,
         bgcolor=LOG_ROW_SELECTED_BG if checked else "#00000000",
         padding=ft.Padding.only(right=8),
         border=ft.Border.only(bottom=ft.BorderSide(1, theme.LINE)),
         alignment=ft.Alignment(-1, 0),
+        on_hover=lambda event: _exit(event) if _is_hover_exit(event) else None,
         data={"event_key": _event_key(item), "selected": checked},
     )
+    return row_control
 
 
 def _checkbox_icon(checked: bool) -> ft.Icons:
@@ -1048,20 +1157,57 @@ def _set_log_row_selection_visual(control: ft.Control, checked: bool) -> None:
     data["selected"] = checked
     control.data = data
 
-    row = getattr(control, "content", None)
-    children = getattr(row, "controls", None) or []
-    if not children:
+    checkbox_shell, _ = _log_row_selector_parts(control)
+    if checkbox_shell is None:
         return
-    selector = children[0]
-    selector_shell = getattr(selector, "content", None)
-    if selector_shell is None:
-        return
-    selector_shell.bgcolor = theme.BLUE_SOFT if checked else "#00000000"
-    icon = getattr(selector_shell, "content", None)
+    checkbox_shell.bgcolor = theme.BLUE_SOFT if checked else "#00000000"
+    icon = getattr(checkbox_shell, "content", None)
     if icon is None:
         return
     icon.icon = _checkbox_icon(checked)
     icon.color = theme.BLUE if checked else theme.MUTED
+
+
+def _set_log_row_range_button_visible(control: ft.Control, visible: bool) -> bool:
+    _, range_button = _log_row_selector_parts(control)
+    if range_button is None:
+        return False
+    data = dict(getattr(control, "data", {}) or {})
+    was_visible = bool(data.get("range_button_visible"))
+    changed = was_visible != visible or bool(getattr(range_button, "visible", False)) != visible
+    data["range_button_visible"] = visible
+    control.data = data
+    range_button.visible = visible
+    return changed
+
+
+def _log_row_selector_parts(control: ft.Control) -> tuple[ft.Control | None, ft.Control | None]:
+    stack = getattr(control, "content", None)
+    stack_children = getattr(stack, "controls", None) or []
+    if not stack_children:
+        return None, None
+    row = stack_children[0]
+    row_children = getattr(row, "controls", None) or []
+    if not row_children:
+        return None, None
+    selector = row_children[0]
+    checkbox_shell = getattr(selector, "content", None)
+    range_overlay = stack_children[1] if len(stack_children) > 1 else None
+    return checkbox_shell, range_overlay
+
+
+def _is_hover_exit(event: object) -> bool:
+    return str(getattr(event, "data", "")).lower() == "false"
+
+
+def _update_control_silently(control: ft.Control) -> None:
+    try:
+        if getattr(control, "page", None):
+            control.update()
+    except RuntimeError:
+        pass
+    except Exception:
+        pass
 
 
 def _empty_state(text: str) -> ft.Control:

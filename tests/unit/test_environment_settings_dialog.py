@@ -123,6 +123,45 @@ class _ChatStub:
         self.enabled.append(selection_ids)
 
 
+class _PlayerAiStub:
+    def __init__(self) -> None:
+        self.saved = []
+
+    def get_settings(self) -> dict:
+        return {
+            "enabled": True,
+            "audience": "operators",
+            "list_mode": "blocklist",
+            "access_entries": [
+                {
+                    "player_key": "steve",
+                    "display_name": "Steve",
+                    "player_uuid": "uuid-steve",
+                }
+            ],
+        }
+
+    def list_known_players(self) -> list[dict]:
+        return [
+            {
+                "name": "Steve",
+                "uuid": "uuid-steve",
+                "is_operator": False,
+                "is_online": True,
+            },
+            {
+                "name": "Admin",
+                "uuid": "uuid-admin",
+                "is_operator": True,
+                "is_online": False,
+            },
+        ]
+
+    def save_settings(self, payload: dict) -> dict:
+        self.saved.append(payload)
+        return payload
+
+
 def test_first_run_dialog_is_dark_and_shows_dotenv_api_keys() -> None:
     page = _PageStub()
     dialog_controller = EnvironmentSettingsDialog(
@@ -252,3 +291,48 @@ def test_connection_and_java_actions_update_feedback_without_network() -> None:
 
     dialog_controller._prepare_java()
     assert dialog_controller._java_path.value == "/detected/java"
+
+
+def test_player_ai_settings_load_add_and_save_with_basic_settings() -> None:
+    page = _PageStub()
+    environment = _EnvironmentStub()
+    player_ai = _PlayerAiStub()
+    dialog_controller = EnvironmentSettingsDialog(
+        page,
+        environment,
+        _JavaStub(),
+        _ChatStub(),
+        player_ai,
+    )
+    dialog_controller.show()
+
+    assert dialog_controller._player_ai_enabled.value is True
+    assert dialog_controller._player_ai_audience.selected == ["operators"]
+    assert dialog_controller._player_ai_list_mode.selected == ["blocklist"]
+    assert dialog_controller._player_ai_list_hint.value == (
+        "仅管理员默认允许；名单用于排除指定管理员。"
+    )
+    dialog_controller._player_ai_player_input.value = "adm"
+    dialog_controller._refresh_player_ai_suggestions()
+    assert dialog_controller._player_ai_suggestions.visible is True
+
+    dialog_controller._add_player_ai_entry(
+        player=player_ai.list_known_players()[1]
+    )
+    dialog_controller._player_ai_list_mode.selected = ["allowlist"]
+    dialog_controller._update_player_ai_list_hint()
+    assert dialog_controller._player_ai_list_hint.value == (
+        "管理员自动允许；名单用于额外允许普通玩家。"
+    )
+    dialog_controller._save()
+
+    assert environment.saved
+    assert player_ai.saved == [{
+        "enabled": True,
+        "audience": "operators",
+        "list_mode": "allowlist",
+        "access_entries": [
+            {"display_name": "Admin", "player_uuid": "uuid-admin"},
+            {"display_name": "Steve", "player_uuid": "uuid-steve"},
+        ],
+    }]

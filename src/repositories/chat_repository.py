@@ -294,6 +294,52 @@ class ChatRepository:
             ).fetchall()
         return [_message_row_to_dict(row) for row in rows]
 
+    def list_recent_completed_turn_messages(
+        self,
+        session_id: str,
+        *,
+        source: str,
+        since: str,
+        limit: int,
+    ) -> list[dict]:
+        with locked_connection(self.connection):
+            turn_rows = self.connection.execute(
+                """
+                SELECT id, session_id, turn_index, status, source, created_at, completed_at
+                FROM chat_turns
+                WHERE session_id = ?
+                  AND source = ?
+                  AND status = 'completed'
+                  AND completed_at IS NOT NULL
+                  AND completed_at >= ?
+                ORDER BY turn_index DESC
+                LIMIT ?
+                """,
+                (session_id, source, since, max(1, int(limit))),
+            ).fetchall()
+            turns = []
+            for turn_row in reversed(turn_rows):
+                message_rows = self.connection.execute(
+                    """
+                    SELECT id, session_id, turn_id, message_index, role, visibility,
+                           content_type, content, tool_name, tool_call_id, metadata_json,
+                           char_count, created_at
+                    FROM chat_messages
+                    WHERE turn_id = ?
+                      AND visibility = 'visible'
+                      AND role IN ('user', 'assistant')
+                    ORDER BY message_index ASC
+                    """,
+                    (turn_row["id"],),
+                ).fetchall()
+                turn = row_to_dict(turn_row)
+                turn["messages"] = [
+                    _message_row_to_dict(message_row)
+                    for message_row in message_rows
+                ]
+                turns.append(turn)
+        return turns
+
     def get_session_view(self, session_id: str, limit_turns: int = 50) -> dict:
         turns = self.list_turns(session_id, limit=limit_turns)
         with locked_connection(self.connection):
