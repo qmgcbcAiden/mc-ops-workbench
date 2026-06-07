@@ -27,6 +27,7 @@ logs/
 .idea/
 .vscode/
 .claude/worktrees/
+.trea/**
 
 .DS_Store
 Thumbs.db
