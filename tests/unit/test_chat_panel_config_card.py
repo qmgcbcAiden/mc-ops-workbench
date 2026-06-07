@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import threading
 import time
 
@@ -24,10 +25,26 @@ from src.ui.components.chat_panel import (
     _compact_time_text,
     _command_action_card,
     _looks_like_command_prompt,
+    _model_icon_src,
     _non_empty_sessions,
     _pending_message,
     _session_switch_rows,
 )
+
+
+def test_other_providers_share_generic_model_icon() -> None:
+    custom_icon = _model_icon_src("custom_1")
+    another_icon = _model_icon_src("openrouter")
+
+    assert custom_icon == another_icon
+    assert custom_icon.startswith("data:image/svg+xml;base64,")
+    svg = base64.b64decode(custom_icon.split(",", 1)[1]).decode("utf-8")
+    assert 'fill="#475569"' in svg
+
+
+def test_known_providers_keep_their_own_model_icons() -> None:
+    assert _model_icon_src("deepseek") != _model_icon_src("custom_1")
+    assert _model_icon_src("qwen") != _model_icon_src("custom_1")
 
 
 class PageStub:

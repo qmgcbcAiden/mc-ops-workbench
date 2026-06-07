@@ -52,10 +52,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 MODEL_ICON_PATHS = {
     "deepseek": PROJECT_ROOT / "icons/deepseek.svg",
     "qwen": PROJECT_ROOT / "icons/qwen.svg",
+    "other": PROJECT_ROOT / "icons/other.svg",
 }
 MODEL_ICON_NORMALIZATION = {
     "deepseek": {"scale": 1.0, "source_width": 1024, "source_height": 1024},
     "qwen": {"scale": 1.0, "source_width": 1024, "source_height": 1024},
+    "other": {"scale": 1.0, "source_width": 1024, "source_height": 1024},
 }
 
 
@@ -1194,13 +1196,20 @@ def _model_icon(model: dict) -> ft.Control:
     )
 
 
-@lru_cache(maxsize=8)
 def _model_icon_src(provider: str) -> str:
-    path = MODEL_ICON_PATHS.get(provider)
+    icon_provider = provider.strip().lower()
+    if icon_provider not in {"deepseek", "qwen"}:
+        icon_provider = "other"
+    return _cached_model_icon_src(icon_provider)
+
+
+@lru_cache(maxsize=3)
+def _cached_model_icon_src(icon_provider: str) -> str:
+    path = MODEL_ICON_PATHS.get(icon_provider)
     if path is None or not path.exists():
         return ""
     encoded = base64.b64encode(
-        _normalized_model_icon_svg(provider, path).encode("utf-8")
+        _normalized_model_icon_svg(icon_provider, path).encode("utf-8")
     ).decode("ascii")
     return f"data:image/svg+xml;base64,{encoded}"
 
