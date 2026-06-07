@@ -118,15 +118,20 @@ def test_say_player_reply_is_low_risk_command() -> None:
     assert risk.confirmation_required is False
 
 
-def test_player_ai_request_options_only_disable_thinking_for_qwen() -> None:
+def test_player_ai_request_options_disable_thinking_for_supported_providers() -> None:
     qwen = FakeLlm()
     deepseek = FakeLlm()
     deepseek.provider = "deepseek"
+    custom = FakeLlm()
+    custom.provider = "custom"
 
     assert _player_ai_request_options(qwen).extra_body == {
         "enable_thinking": False
     }
-    assert _player_ai_request_options(deepseek).extra_body is None
+    assert _player_ai_request_options(deepseek).extra_body == {
+        "thinking": {"type": "disabled"}
+    }
+    assert _player_ai_request_options(custom).extra_body is None
     assert _player_ai_request_options(deepseek).include_finish_notice is False
 
 

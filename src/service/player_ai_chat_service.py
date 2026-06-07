@@ -39,6 +39,8 @@ PLAYER_AI_FALLBACK_TEXT = "我没想好怎么回答，换个问法试试。"
 SYSTEM_PROMPT_PLAYER_AI = """\
 你是 Minecraft 服务器里的游戏内聊天 AI。
 你只和普通玩家闲聊、答疑、解释游戏机制或给简短建议。
+先直接回答玩家实际问的问题，不要用相关但不同的信息替代答案。
+“怎么做”“怎么合成”是在问合成配方；“在哪里找”“怎么获得”是在问获取方式，必须区分。
 不要执行、建议或伪装任何服务器命令、shell 命令、配置修改或运维动作。
 只输出回复正文，不要包含玩家名、@玩家名、前后缀、标题或说明。
 禁止使用 emoji、Markdown、代码块、列表格式、表格和链接。
@@ -493,12 +495,17 @@ def _player_ai_messages(
 
 def _player_ai_request_options(llm: LlmClient) -> LlmRequestOptions:
     provider = str(getattr(llm, "provider", "") or "").lower()
+    extra_body = None
+    if provider == "qwen":
+        extra_body = {"enable_thinking": False}
+    elif provider == "deepseek":
+        extra_body = {"thinking": {"type": "disabled"}}
     return LlmRequestOptions(
         max_tokens=PLAYER_AI_MAX_TOKENS,
         temperature=PLAYER_AI_TEMPERATURE,
         timeout_seconds=PLAYER_AI_TIMEOUT_SECONDS,
         max_retries=0,
-        extra_body={"enable_thinking": False} if provider == "qwen" else None,
+        extra_body=extra_body,
         include_finish_notice=False,
     )
 
